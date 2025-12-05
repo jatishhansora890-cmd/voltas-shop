@@ -179,23 +179,6 @@ export default function App() {
   // --- Firebase Effects ---
 
   useEffect(() => {
-    const initAuth = async () => {
-      try {
-        await signInAnonymously(auth);
-      } catch (e) {
-        console.error("Auth Error", e);
-        setDbStatus('error');
-      }
-    };
-    initAuth();
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      if (u) setDbStatus('connected');
-    });
-    return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
     if (!user) return;
 
     const entriesRef = collection(db, 'artifacts', appId, 'public', 'data', 'production_entries');
@@ -209,7 +192,19 @@ export default function App() {
     const unsubSettings = onSnapshot(settingsRef, (snapshot) => {
         snapshot.docs.forEach(doc => {
             const d = doc.data();
-            if (doc.id === 'masterData') setMasterData(prev => ({...INITIAL_MASTER_DATA, ...d.data}));
+            if (doc.id === 'masterData') {
+                const dbData = d.data;
+                // --- CRITICAL FIX: PREVENT CRASH FROM OLD DATA ---
+                // If the DB has the old Array format for CRF_MACHINES, ignore it and use the new Initial Data.
+                if (dbData && Array.isArray(dbData.CRF_MACHINES)) {
+                    console.warn("Old Data Format Detected (Array). Resetting to new Object structure.");
+                    setMasterData(INITIAL_MASTER_DATA);
+                    // Optional: Force update DB immediately to fix it permanently
+                    updateSettingsDoc('masterData', INITIAL_MASTER_DATA); 
+                } else {
+                    setMasterData(prev => ({...INITIAL_MASTER_DATA, ...dbData}));
+                }
+            }
             if (doc.id === 'activeModels') setActiveModels(d.data || {});
             if (doc.id === 'monthlyPlans') setMonthlyPlans(d.data || {});
             if (doc.id === 'dailyPlans') setDailyPlans(d.data || {});
