@@ -74,17 +74,15 @@ const PROCESS_FLOW = {
   independent: ["CRF", "Door foaming", "WD final"]
 };
 
-// --- UPDATED INITIAL DATA STRUCTURE ---
+// --- INITIAL DATA (New Hierarchy) ---
 const INITIAL_MASTER_DATA = {
-  // CHANGED: CRF is now hierarchical (Machine -> List of Parts)
+  // CRF is now hierarchical: Machine -> List of Parts
   CRF_MACHINES: {
     "Komatsu Press": ["Side Panel", "Back Panel", "Bottom Plate"],
     "Thermoforming": ["Inner Liner", "Door Liner"],
     "Extrusion": ["Profile"],
     "Paint Shop": ["Paint Part 1"]
   },
-  // REMOVED: CRF_PARTS (now nested inside machines)
-  
   CF_LINE: {
     "Hard Top": ["100L", "200L", "300L", "400L", "500L"],
     "Glass Top": ["200L", "300L", "400L", "500L"]
@@ -176,7 +174,24 @@ export default function App() {
   const [planDate, setPlanDate] = useState(new Date().toISOString().split('T')[0]);
   const [tempPlanData, setTempPlanData] = useState({});
 
-  // --- Firebase Effects ---
+  // --- Firebase Effects (With Safety Check) ---
+
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        await signInAnonymously(auth);
+      } catch (e) {
+        console.error("Auth Error", e);
+        setDbStatus('error');
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      if (u) setDbStatus('connected');
+    });
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -195,11 +210,11 @@ export default function App() {
             if (doc.id === 'masterData') {
                 const dbData = d.data;
                 // --- CRITICAL FIX: PREVENT CRASH FROM OLD DATA ---
-                // If the DB has the old Array format for CRF_MACHINES, ignore it and use the new Initial Data.
+                // If the DB has the old Array format for CRF_MACHINES, reset it.
                 if (dbData && Array.isArray(dbData.CRF_MACHINES)) {
-                    console.warn("Old Data Format Detected (Array). Resetting to new Object structure.");
+                    console.warn("Old Data Format Detected. Resetting CRF Machines.");
                     setMasterData(INITIAL_MASTER_DATA);
-                    // Optional: Force update DB immediately to fix it permanently
+                    // Auto-fix the DB
                     updateSettingsDoc('masterData', INITIAL_MASTER_DATA); 
                 } else {
                     setMasterData(prev => ({...INITIAL_MASTER_DATA, ...dbData}));
@@ -246,7 +261,7 @@ export default function App() {
       await updateSettingsDoc('activeModels', newStatus);
   };
 
-  // --- UPDATED Settings Logic (Handling Hierarchical CRF) ---
+  // --- UPDATED Settings Logic (Hierarchical) ---
 
   const handleSettingsAddCategory = async () => {
     if (!newCategoryInput) return;
@@ -257,7 +272,7 @@ export default function App() {
         if (masterData.CF_LINE[newCategoryInput]) { showNotification("Exists"); return; }
         newMasterData.CF_LINE = { ...masterData.CF_LINE, [newCategoryInput]: [] };
     } 
-    // CRF_MACHINES logic (Adding a new Machine)
+    // CRF_MACHINES logic (Adding a new Machine Group)
     else if (settingsGroup === 'CRF_MACHINES') {
         if (masterData.CRF_MACHINES[newCategoryInput]) { showNotification("Exists"); return; }
         newMasterData.CRF_MACHINES = { ...masterData.CRF_MACHINES, [newCategoryInput]: [] };
@@ -279,6 +294,7 @@ export default function App() {
         newMasterData.CF_LINE[targetCategoryForModel] = [...newMasterData.CF_LINE[targetCategoryForModel], newItemName];
     } 
     else if (settingsGroup === 'CRF_MACHINES') {
+        // Add Part to Machine
         if(!targetCategoryForModel) { showNotification("Select Machine"); return; }
         newMasterData.CRF_MACHINES[targetCategoryForModel] = [...newMasterData.CRF_MACHINES[targetCategoryForModel], newItemName];
     }
@@ -339,7 +355,7 @@ export default function App() {
         id: Date.now(),
         qty: parseInt(currentQty),
         machine: isCRF ? selectedMachine : null,
-        part: isCRF ? selectedSubCategory : null, // Selected SubCategory is the Part
+        part: isCRF ? selectedSubCategory : null,
         model: selectedModel,
         category: isCRF ? selectedCategory : (isWD ? "Standard" : selectedCategory)
     };
@@ -553,6 +569,11 @@ export default function App() {
     const isCRF = activeTab === 'CRF';
     const isWD = getDataKeyForArea(activeTab) === 'WD_LINE';
     
+    // SAFETY CHECK: Ensure CRF Machines is an Object, not Array
+    const safeCRFData = (masterData.CRF_MACHINES && !Array.isArray(masterData.CRF_MACHINES)) 
+        ? masterData.CRF_MACHINES 
+        : {};
+
     const filterActive = (list) => list.filter(item => activeModels[item] !== false);
 
     const recentEntries = entries.filter(e => e.date === entryDate && e.area === activeTab);
@@ -584,32 +605,28 @@ export default function App() {
             </div>
            
             <div className="grid grid-cols-1 gap-3">
-              {/* --- 4 STEP SELECTION FOR CRF --- */}
-              
-              {/* 1. MACHINE */}
+              {/* SAFE CRF MACHINE SELECT */}
               {isCRF && (
                   <div>
                     <label className="text-xs text-gray-500 font-semibold mb-1 block">Select Machine</label>
                     <div className="relative">
                         <select value={selectedMachine} onChange={(e) => { setSelectedMachine(e.target.value); setSelectedSubCategory(''); }} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 outline-none focus:border-blue-500 appearance-none">
                             <option value="">Select Machine...</option>
-                            {/* CRF MACHINES are now Keys */}
-                            {Object.keys(masterData.CRF_MACHINES).map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                            {Object.keys(safeCRFData).map(opt => <option key={opt} value={opt}>{opt}</option>)}
                         </select>
                         <ChevronDown className="absolute right-3 top-3.5 text-gray-400 pointer-events-none" size={16} />
                     </div>
                   </div>
               )}
 
-              {/* 2. PART (Filtered by Machine) */}
+              {/* SAFE CRF PART SELECT */}
               {isCRF && (
                   <div className={!selectedMachine ? "opacity-50 pointer-events-none" : ""}>
                     <label className="text-xs text-gray-500 font-semibold mb-1 block">Select Part</label>
                     <div className="relative">
                         <select value={selectedSubCategory} onChange={(e) => setSelectedSubCategory(e.target.value)} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 outline-none focus:border-blue-500 appearance-none">
                             <option value="">Select Part...</option>
-                            {/* Filter parts by selected Machine */}
-                            {(selectedMachine && masterData.CRF_MACHINES[selectedMachine] ? masterData.CRF_MACHINES[selectedMachine] : []).map(opt => (
+                            {(selectedMachine && safeCRFData[selectedMachine] ? safeCRFData[selectedMachine] : []).map(opt => (
                                 <option key={opt} value={opt}>{opt}</option>
                             ))}
                         </select>
@@ -618,7 +635,6 @@ export default function App() {
                   </div>
               )}
 
-              {/* 3. CATEGORY */}
               {!isWD && (
                   <div>
                       <label className="text-xs text-gray-500 font-semibold mb-1 block">Product Category</label>
@@ -632,14 +648,12 @@ export default function App() {
                   </div>
               )}
 
-              {/* 4. MODEL */}
               {(selectedCategory || isWD) && (
                   <div className="animate-in fade-in slide-in-from-top-2 duration-300">
                     <label className="text-xs text-gray-500 font-semibold mb-1 block">{isCRF ? 'For Model (Target)' : 'Model'}</label>
                     <div className="relative">
                         <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 outline-none focus:border-blue-500 appearance-none">
                             <option value="">Select Model</option>
-                            {/* Standard Model Logic */}
                             {filterActive(isWD ? masterData.WD_LINE["Standard"] : (masterData.CF_LINE[selectedCategory] || [])).map(model => (
                                 <option key={model} value={model}>{model}</option>
                             ))}
@@ -771,6 +785,14 @@ export default function App() {
   };
 
   const renderSettingsScreen = () => {
+    // Safety Wrapper
+    const getSafeGroupData = (groupKey) => {
+        const data = masterData[groupKey];
+        if (!data || Array.isArray(data)) return {};
+        return data;
+    };
+    const safeGroupData = getSafeGroupData(settingsGroup);
+
     return (
      <div className="p-4 max-w-md mx-auto space-y-6 pb-20">
       <div className="bg-white p-4 rounded-xl border-l-4 border-blue-600 shadow-sm"><h2 className="font-bold text-gray-800 flex items-center gap-2"><Settings size={20} className="text-blue-600" /> Plant Configuration</h2></div>
@@ -780,9 +802,15 @@ export default function App() {
          <button onClick={() => { setSettingsGroup('WD_LINE'); setTargetCategoryForModel(''); }} className={`p-2 rounded-lg text-xs font-bold border ${settingsGroup === 'WD_LINE' ? 'bg-blue-600 text-white' : 'bg-white'}`}>Water Dispenser</button>
       </div>
       <div className="grid grid-cols-1 gap-2">
-         {/* Consolidated CRF Config Button */}
          <button onClick={() => { setSettingsGroup('CRF_MACHINES'); setTargetCategoryForModel(''); }} className={`p-2 rounded-lg text-xs font-bold border ${settingsGroup === 'CRF_MACHINES' ? 'bg-blue-600 text-white' : 'bg-white'}`}>CRF Machines & Parts</button>
       </div>
+
+      {/* Safety Warning */}
+      {(settingsGroup === 'CRF_MACHINES' && Array.isArray(masterData.CRF_MACHINES)) && (
+          <div className="bg-red-50 p-3 rounded text-red-600 text-xs font-bold border border-red-200">
+              ⚠️ Old Data Format Detected. Please refresh to auto-fix.
+          </div>
+      )}
 
       {(settingsGroup === 'CF_LINE' || settingsGroup === 'CRF_MACHINES') && (
         <Card className="p-4 bg-orange-50 border-orange-100">
@@ -804,8 +832,8 @@ export default function App() {
              {(settingsGroup === 'CF_LINE' || settingsGroup === 'CRF_MACHINES') && (
                  <select value={targetCategoryForModel} onChange={(e) => setTargetCategoryForModel(e.target.value)} className="w-full p-2 border rounded text-sm bg-white">
                     <option value="">{settingsGroup === 'CRF_MACHINES' ? "Select Machine..." : "Select Category..."}</option>
-                    {/* Dynamic Key Mapping */}
-                    {Object.keys(masterData[settingsGroup] || {}).map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                    {/* SAFE RENDER */}
+                    {Object.keys(safeGroupData).map(cat => <option key={cat} value={cat}>{cat}</option>)}
                  </select>
              )}
              <div className="flex gap-2">
@@ -819,7 +847,6 @@ export default function App() {
           <h3 className="text-xs font-bold text-gray-400 uppercase mb-3">Existing Items</h3>
           <div className="divide-y divide-gray-100">
              
-             {/* WD LINE (Flat) */}
              {settingsGroup === 'WD_LINE' && masterData.WD_LINE["Standard"].map(m => (
                  <div key={m} className="flex justify-between py-2 text-sm items-center">
                      <span className={activeModels[m] === false ? 'text-gray-400 line-through' : ''}>{m}</span>
@@ -830,14 +857,14 @@ export default function App() {
                  </div>
              ))}
              
-             {/* HIERARCHICAL (CF_LINE OR CRF_MACHINES) */}
-             {(settingsGroup === 'CF_LINE' || settingsGroup === 'CRF_MACHINES') && Object.keys(masterData[settingsGroup] || {}).map(cat => (
+             {/* SAFE RENDER FOR HIERARCHY */}
+             {(settingsGroup === 'CF_LINE' || settingsGroup === 'CRF_MACHINES') && Object.keys(safeGroupData).map(cat => (
                  <div key={cat} className="mb-4">
                      <div className="bg-gray-100 p-2 text-xs font-bold rounded flex justify-between items-center text-gray-700">
                          {cat}
                          <button onClick={() => handleSettingsDeleteCategory(settingsGroup, cat)} className="text-red-500 hover:bg-red-100 p-1 rounded" title="Delete Group"><Trash2 size={14}/></button>
                      </div>
-                     {masterData[settingsGroup][cat].map(m => (
+                     {Array.isArray(safeGroupData[cat]) && safeGroupData[cat].map(m => (
                         <div key={m} className="flex justify-between py-2 pl-2 text-sm border-b border-gray-50 last:border-0 hover:bg-gray-50">
                             <span className={activeModels[m] === false ? 'text-gray-400 line-through' : ''}>{m}</span>
                             <div className="flex gap-3">
