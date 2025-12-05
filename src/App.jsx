@@ -252,7 +252,7 @@ export default function App() {
   const updateSettingsDoc = async (docId, newData) => {
       if (!user) return;
       const ref = doc(db, 'artifacts', appId, 'public', 'data', 'app_settings', docId);
-      await setDoc(ref, { data: newData }, { merge: true });
+      await setDoc(ref, { data: newData });
   };
 
   const toggleModelStatus = async (model) => {
@@ -312,7 +312,7 @@ export default function App() {
 
   const handleSettingsDeleteCategory = async (group, categoryName) => {
       if(!confirm(`Delete Group "${categoryName}"?`)) return;
-      let newMasterData = { ...masterData };
+      let newMasterData = JSON.parse(JSON.stringify(masterData));
       if (group === 'CF_LINE') delete newMasterData.CF_LINE[categoryName];
       if (group === 'CRF_MACHINES') delete newMasterData.CRF_MACHINES[categoryName];
       
@@ -323,7 +323,7 @@ export default function App() {
 
   const handleSettingsDeleteItem = async (group, item, category = null) => {
     if (!confirm(`Delete ${item}?`)) return;
-    let newMasterData = { ...masterData };
+    let newMasterData = JSON.parse(JSON.stringify(masterData));
     
     if (group === 'CF_LINE' && category) {
         newMasterData.CF_LINE[category] = newMasterData.CF_LINE[category].filter(i => i !== item);
