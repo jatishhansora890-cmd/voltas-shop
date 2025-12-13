@@ -252,6 +252,7 @@ export default function App() {
   const updateSettingsDoc = async (docId, newData) => {
       if (!user) return;
       const ref = doc(db, 'artifacts', appId, 'public', 'data', 'app_settings', docId);
+      // REMOVED { merge: true } so deletions are permanent
       await setDoc(ref, { data: newData });
   };
 
@@ -261,21 +262,21 @@ export default function App() {
       await updateSettingsDoc('activeModels', newStatus);
   };
 
-  // --- UPDATED Settings Logic (Hierarchical) ---
+  // --- UPDATED Settings Logic (Hierarchical + Fix Deletion) ---
 
   const handleSettingsAddCategory = async () => {
     if (!newCategoryInput) return;
-    let newMasterData = { ...masterData };
+    let newMasterData = JSON.parse(JSON.stringify(masterData)); // Deep Copy
     
     // CF_LINE logic
     if (settingsGroup === 'CF_LINE') {
         if (masterData.CF_LINE[newCategoryInput]) { showNotification("Exists"); return; }
-        newMasterData.CF_LINE = { ...masterData.CF_LINE, [newCategoryInput]: [] };
+        newMasterData.CF_LINE[newCategoryInput] = [];
     } 
     // CRF_MACHINES logic (Adding a new Machine Group)
     else if (settingsGroup === 'CRF_MACHINES') {
         if (masterData.CRF_MACHINES[newCategoryInput]) { showNotification("Exists"); return; }
-        newMasterData.CRF_MACHINES = { ...masterData.CRF_MACHINES, [newCategoryInput]: [] };
+        newMasterData.CRF_MACHINES[newCategoryInput] = [];
     }
 
     setMasterData(newMasterData); 
@@ -286,7 +287,7 @@ export default function App() {
 
   const handleSettingsAddItem = async () => {
     if (!newItemName) return;
-    let newMasterData = { ...masterData };
+    let newMasterData = JSON.parse(JSON.stringify(masterData)); // Deep Copy
     let newActiveModels = { ...activeModels, [newItemName]: true };
 
     if (settingsGroup === 'CF_LINE') {
@@ -312,7 +313,8 @@ export default function App() {
 
   const handleSettingsDeleteCategory = async (group, categoryName) => {
       if(!confirm(`Delete Group "${categoryName}"?`)) return;
-      let newMasterData = JSON.parse(JSON.stringify(masterData));
+      let newMasterData = JSON.parse(JSON.stringify(masterData)); // Deep Copy
+      
       if (group === 'CF_LINE') delete newMasterData.CF_LINE[categoryName];
       if (group === 'CRF_MACHINES') delete newMasterData.CRF_MACHINES[categoryName];
       
@@ -323,7 +325,7 @@ export default function App() {
 
   const handleSettingsDeleteItem = async (group, item, category = null) => {
     if (!confirm(`Delete ${item}?`)) return;
-    let newMasterData = JSON.parse(JSON.stringify(masterData));
+    let newMasterData = JSON.parse(JSON.stringify(masterData)); // Deep Copy
     
     if (group === 'CF_LINE' && category) {
         newMasterData.CF_LINE[category] = newMasterData.CF_LINE[category].filter(i => i !== item);
@@ -507,9 +509,7 @@ export default function App() {
   };
 
   const processFlowData = useMemo(() => {
-    // 1. Get Monthly Plan
     const planData = monthlyPlans[reportMonth] || {}; 
-    // 2. Filter Entries by Month
     const periodEntries = entries.filter(e => e.date.startsWith(reportMonth)); 
     
     const cfModels = masterData.CF_LINE ? Object.values(masterData.CF_LINE).flat() : []; 
@@ -546,31 +546,25 @@ export default function App() {
       return { modelAggregates: data.sort((a,b) => b.qty - a.qty), dailyBreakdown };
     }
   }, [planReportMode, reportMonth, rangeStart, rangeEnd, monthlyPlans, dailyPlans, masterData]);
- // --- Block 1: Add this new Hourly Data Logic ---
-  
+
+  // --- HOURLY REPORT LOGIC ---
   const hourlyReportData = useMemo(() => {
-    // 1. Filter entries for selected Date & Area
     const filtered = entries.filter(e => e.date === reportDate && e.area === reportArea);
-    
-    // 2. Group by Hour
     const hoursMap = {}; 
     let dayTotal = 0;
 
     filtered.forEach(entry => {
         const dateObj = new Date(entry.timestamp);
-        const hour = dateObj.getHours(); // Gets 0-23
-        // Create Label "09:00 - 10:00"
+        const hour = dateObj.getHours(); 
         const label = `${hour.toString().padStart(2, '0')}:00 - ${(hour + 1).toString().padStart(2, '0')}:00`;
         
         if (!hoursMap[label]) hoursMap[label] = 0;
         
-        // Sum up quantities in this specific entry
         const entryQty = entry.items.reduce((sum, item) => sum + item.qty, 0);
         hoursMap[label] += entryQty;
         dayTotal += entryQty;
     });
 
-    // 3. Sort by Time and Calculate Cumulative
     const sortedKeys = Object.keys(hoursMap).sort();
     let runningTotal = 0;
     
@@ -581,13 +575,13 @@ export default function App() {
             time: timeSlot, 
             qty: qty, 
             cumulative: runningTotal,
-            // Calculate intensity for visual bar (percentage of max hour roughly)
             percent: dayTotal > 0 ? (qty / dayTotal) * 100 : 0 
         };
     });
 
     return { rows, total: dayTotal };
   }, [entries, reportDate, reportArea]);
+
   // --- Renderers ---
 
   const renderHeader = () => (
@@ -734,48 +728,118 @@ export default function App() {
     );
   };
 
-   // --- Block 1: Add this new Hourly Data Logic ---
-  
-  const hourlyReportData = useMemo(() => {
-    // 1. Filter entries for selected Date & Area
-    const filtered = entries.filter(e => e.date === reportDate && e.area === reportArea);
-    
-    // 2. Group by Hour
-    const hoursMap = {}; 
-    let dayTotal = 0;
+  const renderReportScreen = () => {
+    const isCRF = reportArea === 'CRF';
+    return (
+    <div className="p-4 max-w-md mx-auto space-y-6 pb-20">
+      
+      {/* Navigation Tabs */}
+      <div className="flex bg-gray-200 p-1 rounded-lg overflow-x-auto no-scrollbar">
+          {['flow', 'daily', 'hourly', 'plan'].map(t => (
+             <button 
+                key={t}
+                onClick={() => setReportType(t)} 
+                className={`flex-1 py-2 px-3 text-xs font-bold rounded-md transition-all whitespace-nowrap capitalize ${reportType === t ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}
+             >
+                {t === 'flow' ? 'Process Flow' : t === 'daily' ? 'Production' : t === 'hourly' ? 'Hourly' : 'Plan Status'}
+             </button>
+          ))}
+      </div>
+     
+      {/* 1. PROCESS FLOW VIEW */}
+      {reportType === 'flow' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+           <Card className="p-4 bg-white border border-gray-200">
+            <div className="flex justify-between items-start mb-2"><h3 className="text-xs font-bold text-gray-400 uppercase">Flow Configuration</h3><button onClick={() => { const rows = PROCESS_FLOW.mainLine.map((area, idx) => { const actual = processFlowData.areaActuals[area]; const bal = processFlowData.totalPlan - actual; const prev = idx > 0 ? PROCESS_FLOW.mainLine[idx-1] : null; const wip = prev ? (processFlowData.areaActuals[prev] - actual) : 0; return { Area: area, Month_Plan: processFlowData.totalPlan, Actual: actual, Balance: bal, WIP_Stock: wip }; }); exportToCSV(rows, `Process_Flow_${reportMonth}`); }} className="text-blue-600 bg-blue-50 p-1.5 rounded-lg flex items-center gap-1 text-xs font-bold"><Download size={14}/> Export</button></div>
+            <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs font-bold text-gray-500 mb-1 block">Month</label><input type="month" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div>
+                <div><label className="text-xs font-bold text-gray-500 mb-1 block">Model Filter</label><select value={reportModel} onChange={(e) => setReportModel(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm bg-white"><option value="">All Models</option>{(masterData.CF_LINE ? Object.values(masterData.CF_LINE).flat().sort() : []).map(m => <option key={m} value={m}>{m}</option>)}</select></div>
+            </div>
+          </Card>
+          <div className="space-y-0">
+             <div className="flex items-center gap-2 mb-2 px-1"><GitMerge size={18} className="text-blue-600"/><h3 className="font-bold text-gray-700">Line Status (Monthly)</h3></div>
+             <div className="bg-blue-100 p-3 rounded-t-xl border border-blue-200 text-center"><div className="text-xs font-bold text-blue-600 uppercase">{reportModel ? `Budget (${reportModel})` : 'Total Budget'}</div><div className="text-2xl font-bold text-blue-800">{processFlowData.totalPlan}</div></div>
+             <div className="bg-white border-x border-b border-gray-200 rounded-b-xl p-4 space-y-2">{PROCESS_FLOW.mainLine.map((area, index) => { const actual = processFlowData.areaActuals[area]; const balanceToPlan = processFlowData.totalPlan - actual; const prevArea = index > 0 ? PROCESS_FLOW.mainLine[index - 1] : null; const wip = prevArea ? (processFlowData.areaActuals[prevArea] - actual) : 0; return (<div key={area}>{index > 0 && (<div className="flex items-center justify-center py-2 relative"><ArrowDown size={20} className="text-gray-300" />{wip > 0 ? (<span className="absolute left-[60%] text-xs font-bold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full border border-orange-100">WIP: {wip}</span>) : (wip < 0 && <span className="absolute left-[60%] text-[10px] text-red-400">Error</span>)}</div>)}<div className={`p-3 rounded-lg border flex justify-between items-center ${area === 'CF final' ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}><div><div className="font-bold text-gray-800 text-sm">{area}</div></div><div className="flex gap-4 text-right"><div><div className="text-[10px] text-gray-400 uppercase">Act</div><div className="font-bold text-gray-900 text-lg">{actual}</div></div><div className="w-px bg-gray-200"></div><div><div className="text-[10px] text-red-400 uppercase">Bal</div><div className="font-bold text-red-600 text-lg">{balanceToPlan}</div></div></div></div></div>); })}</div>
+          </div>
+        </div>
+      )}
 
-    filtered.forEach(entry => {
-        const dateObj = new Date(entry.timestamp);
-        const hour = dateObj.getHours(); // Gets 0-23
-        // Create Label "09:00 - 10:00"
-        const label = `${hour.toString().padStart(2, '0')}:00 - ${(hour + 1).toString().padStart(2, '0')}:00`;
-        
-        if (!hoursMap[label]) hoursMap[label] = 0;
-        
-        // Sum up quantities in this specific entry
-        const entryQty = entry.items.reduce((sum, item) => sum + item.qty, 0);
-        hoursMap[label] += entryQty;
-        dayTotal += entryQty;
-    });
+      {/* 2. DAILY / MONTHLY PRODUCTION VIEW */}
+      {reportType === 'daily' && (
+        <div className="space-y-4">
+           <div className="flex gap-2 mb-2"><button onClick={() => setProductionTimeframe('daily')} className={`flex-1 py-1.5 text-xs font-bold rounded border flex items-center justify-center gap-1 ${productionTimeframe === 'daily' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}><CalendarDays size={14}/> Daily Report</button><button onClick={() => setProductionTimeframe('monthly')} className={`flex-1 py-1.5 text-xs font-bold rounded border flex items-center justify-center gap-1 ${productionTimeframe === 'monthly' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}><Calendar size={14}/> Monthly Report</button></div>
+          <Card className="p-4 space-y-4 bg-white border border-gray-200">
+             <div className="flex justify-between items-center border-b border-gray-100 pb-2"><span className="text-xs font-bold text-gray-400 uppercase">Filter & Export</span><button onClick={() => { const data = productionReportData.rows; const filename = `${productionTimeframe}_Production_${productionTimeframe === 'daily' ? reportDate : reportMonth}`; let cleanData; if (isCRF) { cleanData = data.map(r => ({ Machine: r.machine, Part: r.part, Model: r.model, Qty: r.actual })); } else { cleanData = data.map(r => ({ Model: r.model, Plan: r.plan, Actual: r.actual, Achievement_Percent: r.percent + '%' })); } exportToCSV(cleanData, filename); }} className="text-blue-600 bg-blue-50 p-1.5 rounded-lg flex items-center gap-1 text-xs font-bold"><Download size={14}/> Export Excel</button></div>
+            <div className="grid grid-cols-2 gap-3">{productionTimeframe === 'daily' ? (<div><label className="text-xs font-bold text-gray-500 mb-1 block">Date</label><input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div>) : (<div><label className="text-xs font-bold text-gray-500 mb-1 block">Month</label><input type="month" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div>)}<div><label className="text-xs font-bold text-gray-500 mb-1 block">Area</label><select value={reportArea} onChange={(e) => setReportArea(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm bg-white">{AREAS.map(area => <option key={area} value={area}>{area}</option>)}</select></div></div>
+          </Card>
+          <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200">
+            <thead className="bg-gray-50 border-b border-gray-200 w-full block"><tr className="flex w-full">{isCRF ? (<><th className="p-3 text-xs font-bold text-gray-500 uppercase w-1/3 text-left">Part/Machine</th><th className="p-3 text-xs font-bold text-gray-500 uppercase flex-1 text-left">For Model</th><th className="p-3 text-xs font-bold text-gray-500 uppercase w-20 text-right">Qty</th></>) : (<><th className="p-3 text-xs font-bold text-gray-500 uppercase flex-1 text-left">Model</th><th className="p-3 text-xs font-bold text-gray-500 uppercase flex-1 text-right">{productionTimeframe === 'daily' ? 'D.Plan' : 'M.Budget'}</th><th className="p-3 text-xs font-bold text-gray-500 uppercase flex-1 text-right">Act</th><th className="p-3 text-xs font-bold text-gray-500 uppercase flex-1 text-right">%</th></>)}</tr></thead>
+            <tbody className="divide-y divide-gray-100 block w-full max-h-[400px] overflow-y-auto">{productionReportData.rows.map((row, idx) => (<tr key={idx} className="hover:bg-gray-50 text-sm flex w-full">{isCRF ? (<><td className="p-3 font-medium text-gray-700 w-1/3 text-left"><div className="font-bold">{row.part}</div><div className="text-[10px] text-gray-400">{row.machine}</div></td><td className="p-3 text-gray-600 flex-1 text-left flex items-center">{row.model}</td><td className="p-3 text-right font-bold text-blue-600 w-20">{row.actual}</td></>) : (<><td className="p-3 font-medium text-gray-700 flex-1 text-left">{row.model}</td><td className="p-3 text-right text-gray-400 font-medium flex-1">{row.plan || '-'}</td><td className="p-3 text-right font-bold text-blue-600 flex-1">{row.actual}</td><td className="p-3 text-right flex-1"><span className={`px-2 py-0.5 rounded text-xs font-bold ${row.percent >= 90 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{row.percent}%</span></td></>)}</tr>))}</tbody>
+             <div className="bg-blue-50 p-3 flex justify-between items-center border-t border-blue-100"><span className="text-blue-800 font-bold text-sm">Total {isCRF ? 'Parts' : 'Units'}</span><span className="text-blue-800 font-bold text-lg">{productionReportData.totalActual}</span></div>
+          </div>
+        </div>
+      )}
 
-    // 3. Sort by Time and Calculate Cumulative
-    const sortedKeys = Object.keys(hoursMap).sort();
-    let runningTotal = 0;
-    
-    const rows = sortedKeys.map(timeSlot => {
-        const qty = hoursMap[timeSlot];
-        runningTotal += qty;
-        return { 
-            time: timeSlot, 
-            qty: qty, 
-            cumulative: runningTotal,
-            // Calculate intensity for visual bar (percentage of max hour roughly)
-            percent: dayTotal > 0 ? (qty / dayTotal) * 100 : 0 
-        };
-    });
+      {/* 3. NEW HOURLY REPORT VIEW */}
+      {reportType === 'hourly' && (
+        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
+           <Card className="p-4 bg-white border border-gray-200">
+             <div className="flex justify-between items-center border-b border-gray-100 pb-2 mb-3">
+                 <span className="text-xs font-bold text-gray-400 uppercase">Hourly Filters</span>
+                 <button onClick={() => exportToCSV(hourlyReportData.rows, `Hourly_${reportArea}_${reportDate}`)} className="text-blue-600 bg-blue-50 p-1.5 rounded-lg flex items-center gap-1 text-xs font-bold"><Download size={14}/> Export</button>
+             </div>
+             <div className="grid grid-cols-2 gap-3">
+                 <div><label className="text-xs font-bold text-gray-500 mb-1 block">Date</label><input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div>
+                 <div><label className="text-xs font-bold text-gray-500 mb-1 block">Area</label><select value={reportArea} onChange={(e) => setReportArea(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm bg-white">{AREAS.map(area => <option key={area} value={area}>{area}</option>)}</select></div>
+             </div>
+           </Card>
 
-    return { rows, total: dayTotal };
-  }, [entries, reportDate, reportArea]);
+           <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200">
+              <div className="bg-gray-50 p-3 border-b border-gray-200 flex justify-between items-center">
+                  <span className="text-sm font-bold text-gray-700">Hourly Output</span>
+                  <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full font-bold">Total: {hourlyReportData.total}</span>
+              </div>
+              
+              {hourlyReportData.rows.length === 0 ? (
+                  <div className="p-8 text-center text-gray-400 text-sm">No production data for this date.</div>
+              ) : (
+                  <div className="divide-y divide-gray-100">
+                      {hourlyReportData.rows.map((row, idx) => (
+                          <div key={idx} className="p-3 hover:bg-gray-50 transition-colors">
+                              <div className="flex justify-between items-center mb-1">
+                                  <div className="text-sm font-bold text-gray-800">{row.time}</div>
+                                  <div className="flex gap-4 text-sm">
+                                      <div className="text-gray-500"><span className="text-xs uppercase mr-1">Qty:</span><span className="font-bold text-gray-900">{row.qty}</span></div>
+                                      <div className="text-blue-600"><span className="text-xs uppercase mr-1">Cum:</span><span className="font-bold">{row.cumulative}</span></div>
+                                  </div>
+                              </div>
+                              {/* Visual Bar */}
+                              <div className="w-full bg-gray-100 rounded-full h-1.5 mt-1 overflow-hidden">
+                                  <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${Math.min(row.percent * 2, 100)}%` }}></div>
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+              )}
+           </div>
+        </div>
+      )}
+     
+      {/* 4. PLAN REPORT VIEW */}
+      {reportType === 'plan' && (
+         <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
+           <div className="flex gap-2"><button onClick={() => setPlanReportMode('monthly')} className={`flex-1 py-1.5 text-xs font-bold rounded border ${planReportMode === 'monthly' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}>Monthly Budget</button><button onClick={() => setPlanReportMode('range')} className={`flex-1 py-1.5 text-xs font-bold rounded border ${planReportMode === 'range' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}>Date Range</button></div>
+           <Card className="p-4 bg-white border border-gray-200">
+             <div className="flex justify-between items-center mb-2 border-b border-gray-100 pb-2"><span className="text-xs font-bold text-gray-400 uppercase">View & Export</span><button onClick={() => { const filename = planReportMode === 'monthly' ? `Budget_${reportMonth}` : `Plan_${rangeStart}_to_${rangeEnd}`; if (planReportMode === 'monthly') { exportToCSV(planReportData.modelAggregates.map(r => ({ Model: r.model, Monthly_Budget: r.qty })), filename); } else { exportToCSV(planReportData.dailyBreakdown.map(d => ({ Date: d.date, Total_Plan_Qty: d.total })), filename + "_Breakdown"); } }} className="text-blue-600 bg-blue-50 p-1.5 rounded-lg flex items-center gap-1 text-xs font-bold"><Download size={14}/> Export</button></div>
+             {planReportMode === 'monthly' ? (<div className="flex justify-between items-end"><div className="flex-1 mr-4"><label className="text-xs font-bold text-gray-500 mb-1 block">Select Month</label><input type="month" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div><button onClick={() => handleEditPlanFromReport('monthly', reportMonth)} className="bg-blue-600 text-white p-2 rounded-lg mb-0.5"><Pencil size={18} /></button></div>) : (<div className="grid grid-cols-2 gap-3"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Start Date</label><input type="date" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">End Date</label><input type="date" value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div></div>)}
+           </Card>
+           {planReportMode === 'monthly' ? (<div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200"><div className="bg-gray-50 p-3 border-b border-gray-100 font-bold text-gray-700 text-sm">Budget Breakdown ({reportMonth})</div>{planReportData.modelAggregates.length > 0 ? (<table className="w-full text-left"><tbody className="divide-y divide-gray-100">{planReportData.modelAggregates.map((row) => (<tr key={row.model} className="text-sm"><td className="p-3 font-medium text-gray-700">{row.model}</td><td className="p-3 text-right font-bold text-gray-900">{row.qty}</td></tr>))}</tbody></table>) : (<div className="p-4 text-center text-sm text-gray-400">No budget set for this month.</div>)}</div>) : (<div className="space-y-4"><div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200"><div className="bg-purple-50 p-3 border-b border-purple-100 font-bold text-purple-800 text-sm">Total Plan ({rangeStart} to {rangeEnd})</div>{planReportData.modelAggregates.length > 0 ? (<table className="w-full text-left"><tbody className="divide-y divide-gray-100">{planReportData.modelAggregates.map((row) => (<tr key={row.model} className="text-sm"><td className="p-3 font-medium text-gray-700">{row.model}</td><td className="p-3 text-right font-bold text-gray-900">{row.qty}</td></tr>))}</tbody></table>) : (<div className="p-4 text-center text-sm text-gray-400">No plans found in range.</div>)}</div><div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200"><div className="bg-gray-50 p-3 border-b border-gray-100 font-bold text-gray-700 text-sm">Daily Schedule Breakdown</div><div className="divide-y divide-gray-100">{planReportData.dailyBreakdown.map(day => (<div key={day.date} className="flex items-center justify-between p-3 hover:bg-gray-50"><div><div className="font-medium text-gray-800 text-sm">{day.date}</div></div><div className="flex items-center gap-4"><span className="text-sm font-bold text-gray-600">{day.total} units</span><button onClick={() => handleEditPlanFromReport('daily', day.date)} className="text-blue-600 p-1 bg-blue-50 rounded"><Pencil size={14}/></button></div></div>))}</div></div></div>)}
+        </div>
+      )}
+    </div>
+    );
+  };
+
   const renderPlanScreen = () => {
     if (!isPlanUnlocked) {
       return (
@@ -842,91 +906,4 @@ export default function App() {
           </div>
       )}
 
-      {(settingsGroup === 'CF_LINE' || settingsGroup === 'CRF_MACHINES') && (
-        <Card className="p-4 bg-orange-50 border-orange-100">
-           <label className="text-xs font-bold text-orange-600 mb-2 block uppercase flex items-center gap-1">
-               <FolderPlus size={14}/> {settingsGroup === 'CRF_MACHINES' ? 'Add Machine Group' : 'Add Product Category'}
-           </label>
-           <div className="flex gap-2">
-               <input type="text" value={newCategoryInput} onChange={(e) => setNewCategoryInput(e.target.value)} placeholder={settingsGroup === 'CRF_MACHINES' ? "Machine Name" : "Category Name"} className="flex-1 p-2 border rounded text-sm bg-white" />
-               <button onClick={handleSettingsAddCategory} className="bg-orange-600 text-white px-4 rounded font-bold text-sm"><Plus size={18} /></button>
-           </div>
-        </Card>
-      )}
-
-      <Card className="p-4">
-          <label className="text-xs font-bold text-gray-500 mb-2 block uppercase">
-              {settingsGroup === 'CRF_MACHINES' ? 'Add Part to Machine' : 'Add Model/Item'}
-          </label>
-          <div className="space-y-2">
-             {(settingsGroup === 'CF_LINE' || settingsGroup === 'CRF_MACHINES') && (
-                 <select value={targetCategoryForModel} onChange={(e) => setTargetCategoryForModel(e.target.value)} className="w-full p-2 border rounded text-sm bg-white">
-                    <option value="">{settingsGroup === 'CRF_MACHINES' ? "Select Machine..." : "Select Category..."}</option>
-                    {/* SAFE RENDER */}
-                    {Object.keys(safeGroupData).map(cat => <option key={cat} value={cat}>{cat}</option>)}
-                 </select>
-             )}
-             <div className="flex gap-2">
-                 <input type="text" value={newItemName} onChange={(e) => setNewItemName(e.target.value)} placeholder="Name..." className="flex-1 p-2 border rounded text-sm" />
-                 <button onClick={handleSettingsAddItem} className="bg-green-600 text-white px-4 rounded font-bold text-sm"><Plus size={18} /></button>
-             </div>
-          </div>
-      </Card>
-
-      <Card className="p-4">
-          <h3 className="text-xs font-bold text-gray-400 uppercase mb-3">Existing Items</h3>
-          <div className="divide-y divide-gray-100">
-             
-             {settingsGroup === 'WD_LINE' && masterData.WD_LINE["Standard"].map(m => (
-                 <div key={m} className="flex justify-between py-2 text-sm items-center">
-                     <span className={activeModels[m] === false ? 'text-gray-400 line-through' : ''}>{m}</span>
-                     <div className="flex gap-3">
-                         <button onClick={() => toggleModelStatus(m)} className={activeModels[m] !== false ? 'text-green-600' : 'text-gray-300'}>{activeModels[m] !== false ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}</button>
-                         <button onClick={() => handleSettingsDeleteItem('WD_LINE', m)} className="text-red-400"><Trash2 size={14}/></button>
-                     </div>
-                 </div>
-             ))}
-             
-             {/* SAFE RENDER FOR HIERARCHY */}
-             {(settingsGroup === 'CF_LINE' || settingsGroup === 'CRF_MACHINES') && Object.keys(safeGroupData).map(cat => (
-                 <div key={cat} className="mb-4">
-                     <div className="bg-gray-100 p-2 text-xs font-bold rounded flex justify-between items-center text-gray-700">
-                         {cat}
-                         <button onClick={() => handleSettingsDeleteCategory(settingsGroup, cat)} className="text-red-500 hover:bg-red-100 p-1 rounded" title="Delete Group"><Trash2 size={14}/></button>
-                     </div>
-                     {Array.isArray(safeGroupData[cat]) && safeGroupData[cat].map(m => (
-                        <div key={m} className="flex justify-between py-2 pl-2 text-sm border-b border-gray-50 last:border-0 hover:bg-gray-50">
-                            <span className={activeModels[m] === false ? 'text-gray-400 line-through' : ''}>{m}</span>
-                            <div className="flex gap-3">
-                                <button onClick={() => toggleModelStatus(m)} className={activeModels[m] !== false ? 'text-green-600' : 'text-gray-300'}>
-                                   {activeModels[m] !== false ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}</button>
-                                <button onClick={() => handleSettingsDeleteItem(settingsGroup, m, cat)} className="text-red-400"><Trash2 size={14}/></button>
-                            </div>
-                        </div>
-                     ))}
-                 </div>
-             ))}
-          </div>
-      </Card>
-    </div>
-    );
-  };
-
-  const renderContent = () => {
-    switch (view) {
-      case 'entry': return renderEntryScreen();
-      case 'report': return renderReportScreen();
-      case 'plan': return renderPlanScreen();
-      case 'settings': return renderSettingsScreen();
-      default: return renderEntryScreen();
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-gray-50 font-sans text-gray-900">
-      {renderHeader()}
-      <main>{renderContent()}</main>
-      {notification && <div className="fixed bottom-24 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-xl flex items-center gap-2 z-[60] animate-in fade-in slide-in-from-bottom-4"><CheckCircle2 size={18} /><span className="font-medium text-sm">{notification}</span></div>}
-    </div>
-  );
-}
+      {(settingsGroup === 'CF_LINE' || settingsGroup === 'CRF_
