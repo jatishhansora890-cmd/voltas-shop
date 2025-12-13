@@ -546,7 +546,48 @@ export default function App() {
       return { modelAggregates: data.sort((a,b) => b.qty - a.qty), dailyBreakdown };
     }
   }, [planReportMode, reportMonth, rangeStart, rangeEnd, monthlyPlans, dailyPlans, masterData]);
+ // --- Block 1: Add this new Hourly Data Logic ---
+  
+  const hourlyReportData = useMemo(() => {
+    // 1. Filter entries for selected Date & Area
+    const filtered = entries.filter(e => e.date === reportDate && e.area === reportArea);
+    
+    // 2. Group by Hour
+    const hoursMap = {}; 
+    let dayTotal = 0;
 
+    filtered.forEach(entry => {
+        const dateObj = new Date(entry.timestamp);
+        const hour = dateObj.getHours(); // Gets 0-23
+        // Create Label "09:00 - 10:00"
+        const label = `${hour.toString().padStart(2, '0')}:00 - ${(hour + 1).toString().padStart(2, '0')}:00`;
+        
+        if (!hoursMap[label]) hoursMap[label] = 0;
+        
+        // Sum up quantities in this specific entry
+        const entryQty = entry.items.reduce((sum, item) => sum + item.qty, 0);
+        hoursMap[label] += entryQty;
+        dayTotal += entryQty;
+    });
+
+    // 3. Sort by Time and Calculate Cumulative
+    const sortedKeys = Object.keys(hoursMap).sort();
+    let runningTotal = 0;
+    
+    const rows = sortedKeys.map(timeSlot => {
+        const qty = hoursMap[timeSlot];
+        runningTotal += qty;
+        return { 
+            time: timeSlot, 
+            qty: qty, 
+            cumulative: runningTotal,
+            // Calculate intensity for visual bar (percentage of max hour roughly)
+            percent: dayTotal > 0 ? (qty / dayTotal) * 100 : 0 
+        };
+    });
+
+    return { rows, total: dayTotal };
+  }, [entries, reportDate, reportArea]);
   // --- Renderers ---
 
   const renderHeader = () => (
