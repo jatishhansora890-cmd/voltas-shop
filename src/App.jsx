@@ -252,7 +252,6 @@ export default function App() {
   const updateSettingsDoc = async (docId, newData) => {
       if (!user) return;
       const ref = doc(db, 'artifacts', appId, 'public', 'data', 'app_settings', docId);
-      // REMOVED { merge: true } so deletions are permanent
       await setDoc(ref, { data: newData });
   };
 
@@ -262,21 +261,21 @@ export default function App() {
       await updateSettingsDoc('activeModels', newStatus);
   };
 
-  // --- UPDATED Settings Logic (Hierarchical + Fix Deletion) ---
+  // --- UPDATED Settings Logic (Hierarchical) ---
 
   const handleSettingsAddCategory = async () => {
     if (!newCategoryInput) return;
-    let newMasterData = JSON.parse(JSON.stringify(masterData)); // Deep Copy
+    let newMasterData = { ...masterData };
     
     // CF_LINE logic
     if (settingsGroup === 'CF_LINE') {
         if (masterData.CF_LINE[newCategoryInput]) { showNotification("Exists"); return; }
-        newMasterData.CF_LINE[newCategoryInput] = [];
+        newMasterData.CF_LINE = { ...masterData.CF_LINE, [newCategoryInput]: [] };
     } 
     // CRF_MACHINES logic (Adding a new Machine Group)
     else if (settingsGroup === 'CRF_MACHINES') {
         if (masterData.CRF_MACHINES[newCategoryInput]) { showNotification("Exists"); return; }
-        newMasterData.CRF_MACHINES[newCategoryInput] = [];
+        newMasterData.CRF_MACHINES = { ...masterData.CRF_MACHINES, [newCategoryInput]: [] };
     }
 
     setMasterData(newMasterData); 
@@ -287,7 +286,7 @@ export default function App() {
 
   const handleSettingsAddItem = async () => {
     if (!newItemName) return;
-    let newMasterData = JSON.parse(JSON.stringify(masterData)); // Deep Copy
+    let newMasterData = { ...masterData };
     let newActiveModels = { ...activeModels, [newItemName]: true };
 
     if (settingsGroup === 'CF_LINE') {
@@ -313,8 +312,7 @@ export default function App() {
 
   const handleSettingsDeleteCategory = async (group, categoryName) => {
       if(!confirm(`Delete Group "${categoryName}"?`)) return;
-      let newMasterData = JSON.parse(JSON.stringify(masterData)); // Deep Copy
-      
+      let newMasterData = JSON.parse(JSON.stringify(masterData));
       if (group === 'CF_LINE') delete newMasterData.CF_LINE[categoryName];
       if (group === 'CRF_MACHINES') delete newMasterData.CRF_MACHINES[categoryName];
       
@@ -325,7 +323,7 @@ export default function App() {
 
   const handleSettingsDeleteItem = async (group, item, category = null) => {
     if (!confirm(`Delete ${item}?`)) return;
-    let newMasterData = JSON.parse(JSON.stringify(masterData)); // Deep Copy
+    let newMasterData = JSON.parse(JSON.stringify(masterData));
     
     if (group === 'CF_LINE' && category) {
         newMasterData.CF_LINE[category] = newMasterData.CF_LINE[category].filter(i => i !== item);
@@ -509,7 +507,9 @@ export default function App() {
   };
 
   const processFlowData = useMemo(() => {
+    // 1. Get Monthly Plan
     const planData = monthlyPlans[reportMonth] || {}; 
+    // 2. Filter Entries by Month
     const periodEntries = entries.filter(e => e.date.startsWith(reportMonth)); 
     
     const cfModels = masterData.CF_LINE ? Object.values(masterData.CF_LINE).flat() : []; 
@@ -546,41 +546,6 @@ export default function App() {
       return { modelAggregates: data.sort((a,b) => b.qty - a.qty), dailyBreakdown };
     }
   }, [planReportMode, reportMonth, rangeStart, rangeEnd, monthlyPlans, dailyPlans, masterData]);
-
-  // --- HOURLY REPORT LOGIC ---
-  const hourlyReportData = useMemo(() => {
-    const filtered = entries.filter(e => e.date === reportDate && e.area === reportArea);
-    const hoursMap = {}; 
-    let dayTotal = 0;
-
-    filtered.forEach(entry => {
-        const dateObj = new Date(entry.timestamp);
-        const hour = dateObj.getHours(); 
-        const label = `${hour.toString().padStart(2, '0')}:00 - ${(hour + 1).toString().padStart(2, '0')}:00`;
-        
-        if (!hoursMap[label]) hoursMap[label] = 0;
-        
-        const entryQty = entry.items.reduce((sum, item) => sum + item.qty, 0);
-        hoursMap[label] += entryQty;
-        dayTotal += entryQty;
-    });
-
-    const sortedKeys = Object.keys(hoursMap).sort();
-    let runningTotal = 0;
-    
-    const rows = sortedKeys.map(timeSlot => {
-        const qty = hoursMap[timeSlot];
-        runningTotal += qty;
-        return { 
-            time: timeSlot, 
-            qty: qty, 
-            cumulative: runningTotal,
-            percent: dayTotal > 0 ? (qty / dayTotal) * 100 : 0 
-        };
-    });
-
-    return { rows, total: dayTotal };
-  }, [entries, reportDate, reportArea]);
 
   // --- Renderers ---
 
@@ -732,25 +697,13 @@ export default function App() {
     const isCRF = reportArea === 'CRF';
     return (
     <div className="p-4 max-w-md mx-auto space-y-6 pb-20">
-      
-      {/* Navigation Tabs */}
-      <div className="flex bg-gray-200 p-1 rounded-lg overflow-x-auto no-scrollbar">
-          {['flow', 'daily', 'hourly', 'plan'].map(t => (
-             <button 
-                key={t}
-                onClick={() => setReportType(t)} 
-                className={`flex-1 py-2 px-3 text-xs font-bold rounded-md transition-all whitespace-nowrap capitalize ${reportType === t ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}
-             >
-                {t === 'flow' ? 'Process Flow' : t === 'daily' ? 'Production' : t === 'hourly' ? 'Hourly' : 'Plan Status'}
-             </button>
-          ))}
-      </div>
+      <div className="flex bg-gray-200 p-1 rounded-lg"><button onClick={() => setReportType('flow')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${reportType === 'flow' ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}>Process Flow</button><button onClick={() => setReportType('daily')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${reportType === 'daily' ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}>Production</button><button onClick={() => setReportType('plan')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${reportType === 'plan' ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}>Plan Status</button></div>
      
-      {/* 1. PROCESS FLOW VIEW */}
       {reportType === 'flow' && (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
            <Card className="p-4 bg-white border border-gray-200">
             <div className="flex justify-between items-start mb-2"><h3 className="text-xs font-bold text-gray-400 uppercase">Flow Configuration</h3><button onClick={() => { const rows = PROCESS_FLOW.mainLine.map((area, idx) => { const actual = processFlowData.areaActuals[area]; const bal = processFlowData.totalPlan - actual; const prev = idx > 0 ? PROCESS_FLOW.mainLine[idx-1] : null; const wip = prev ? (processFlowData.areaActuals[prev] - actual) : 0; return { Area: area, Month_Plan: processFlowData.totalPlan, Actual: actual, Balance: bal, WIP_Stock: wip }; }); exportToCSV(rows, `Process_Flow_${reportMonth}`); }} className="text-blue-600 bg-blue-50 p-1.5 rounded-lg flex items-center gap-1 text-xs font-bold"><Download size={14}/> Export</button></div>
+            {/* UPDATED: Month Filter */}
             <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-bold text-gray-500 mb-1 block">Month</label><input type="month" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div>
                 <div><label className="text-xs font-bold text-gray-500 mb-1 block">Model Filter</label><select value={reportModel} onChange={(e) => setReportModel(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm bg-white"><option value="">All Models</option>{(masterData.CF_LINE ? Object.values(masterData.CF_LINE).flat().sort() : []).map(m => <option key={m} value={m}>{m}</option>)}</select></div>
@@ -764,7 +717,6 @@ export default function App() {
         </div>
       )}
 
-      {/* 2. DAILY / MONTHLY PRODUCTION VIEW */}
       {reportType === 'daily' && (
         <div className="space-y-4">
            <div className="flex gap-2 mb-2"><button onClick={() => setProductionTimeframe('daily')} className={`flex-1 py-1.5 text-xs font-bold rounded border flex items-center justify-center gap-1 ${productionTimeframe === 'daily' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}><CalendarDays size={14}/> Daily Report</button><button onClick={() => setProductionTimeframe('monthly')} className={`flex-1 py-1.5 text-xs font-bold rounded border flex items-center justify-center gap-1 ${productionTimeframe === 'monthly' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}><Calendar size={14}/> Monthly Report</button></div>
@@ -779,53 +731,7 @@ export default function App() {
           </div>
         </div>
       )}
-
-      {/* 3. NEW HOURLY REPORT VIEW */}
-      {reportType === 'hourly' && (
-        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
-           <Card className="p-4 bg-white border border-gray-200">
-             <div className="flex justify-between items-center border-b border-gray-100 pb-2 mb-3">
-                 <span className="text-xs font-bold text-gray-400 uppercase">Hourly Filters</span>
-                 <button onClick={() => exportToCSV(hourlyReportData.rows, `Hourly_${reportArea}_${reportDate}`)} className="text-blue-600 bg-blue-50 p-1.5 rounded-lg flex items-center gap-1 text-xs font-bold"><Download size={14}/> Export</button>
-             </div>
-             <div className="grid grid-cols-2 gap-3">
-                 <div><label className="text-xs font-bold text-gray-500 mb-1 block">Date</label><input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div>
-                 <div><label className="text-xs font-bold text-gray-500 mb-1 block">Area</label><select value={reportArea} onChange={(e) => setReportArea(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm bg-white">{AREAS.map(area => <option key={area} value={area}>{area}</option>)}</select></div>
-             </div>
-           </Card>
-
-           <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200">
-              <div className="bg-gray-50 p-3 border-b border-gray-200 flex justify-between items-center">
-                  <span className="text-sm font-bold text-gray-700">Hourly Output</span>
-                  <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full font-bold">Total: {hourlyReportData.total}</span>
-              </div>
-              
-              {hourlyReportData.rows.length === 0 ? (
-                  <div className="p-8 text-center text-gray-400 text-sm">No production data for this date.</div>
-              ) : (
-                  <div className="divide-y divide-gray-100">
-                      {hourlyReportData.rows.map((row, idx) => (
-                          <div key={idx} className="p-3 hover:bg-gray-50 transition-colors">
-                              <div className="flex justify-between items-center mb-1">
-                                  <div className="text-sm font-bold text-gray-800">{row.time}</div>
-                                  <div className="flex gap-4 text-sm">
-                                      <div className="text-gray-500"><span className="text-xs uppercase mr-1">Qty:</span><span className="font-bold text-gray-900">{row.qty}</span></div>
-                                      <div className="text-blue-600"><span className="text-xs uppercase mr-1">Cum:</span><span className="font-bold">{row.cumulative}</span></div>
-                                  </div>
-                              </div>
-                              {/* Visual Bar */}
-                              <div className="w-full bg-gray-100 rounded-full h-1.5 mt-1 overflow-hidden">
-                                  <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${Math.min(row.percent * 2, 100)}%` }}></div>
-                              </div>
-                          </div>
-                      ))}
-                  </div>
-              )}
-           </div>
-        </div>
-      )}
      
-      {/* 4. PLAN REPORT VIEW */}
       {reportType === 'plan' && (
          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
            <div className="flex gap-2"><button onClick={() => setPlanReportMode('monthly')} className={`flex-1 py-1.5 text-xs font-bold rounded border ${planReportMode === 'monthly' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}>Monthly Budget</button><button onClick={() => setPlanReportMode('range')} className={`flex-1 py-1.5 text-xs font-bold rounded border ${planReportMode === 'range' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}>Date Range</button></div>
@@ -906,4 +812,91 @@ export default function App() {
           </div>
       )}
 
-      {(settingsGroup === 'CF_LINE' || settingsGroup === 'CRF_
+      {(settingsGroup === 'CF_LINE' || settingsGroup === 'CRF_MACHINES') && (
+        <Card className="p-4 bg-orange-50 border-orange-100">
+           <label className="text-xs font-bold text-orange-600 mb-2 block uppercase flex items-center gap-1">
+               <FolderPlus size={14}/> {settingsGroup === 'CRF_MACHINES' ? 'Add Machine Group' : 'Add Product Category'}
+           </label>
+           <div className="flex gap-2">
+               <input type="text" value={newCategoryInput} onChange={(e) => setNewCategoryInput(e.target.value)} placeholder={settingsGroup === 'CRF_MACHINES' ? "Machine Name" : "Category Name"} className="flex-1 p-2 border rounded text-sm bg-white" />
+               <button onClick={handleSettingsAddCategory} className="bg-orange-600 text-white px-4 rounded font-bold text-sm"><Plus size={18} /></button>
+           </div>
+        </Card>
+      )}
+
+      <Card className="p-4">
+          <label className="text-xs font-bold text-gray-500 mb-2 block uppercase">
+              {settingsGroup === 'CRF_MACHINES' ? 'Add Part to Machine' : 'Add Model/Item'}
+          </label>
+          <div className="space-y-2">
+             {(settingsGroup === 'CF_LINE' || settingsGroup === 'CRF_MACHINES') && (
+                 <select value={targetCategoryForModel} onChange={(e) => setTargetCategoryForModel(e.target.value)} className="w-full p-2 border rounded text-sm bg-white">
+                    <option value="">{settingsGroup === 'CRF_MACHINES' ? "Select Machine..." : "Select Category..."}</option>
+                    {/* SAFE RENDER */}
+                    {Object.keys(safeGroupData).map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                 </select>
+             )}
+             <div className="flex gap-2">
+                 <input type="text" value={newItemName} onChange={(e) => setNewItemName(e.target.value)} placeholder="Name..." className="flex-1 p-2 border rounded text-sm" />
+                 <button onClick={handleSettingsAddItem} className="bg-green-600 text-white px-4 rounded font-bold text-sm"><Plus size={18} /></button>
+             </div>
+          </div>
+      </Card>
+
+      <Card className="p-4">
+          <h3 className="text-xs font-bold text-gray-400 uppercase mb-3">Existing Items</h3>
+          <div className="divide-y divide-gray-100">
+             
+             {settingsGroup === 'WD_LINE' && masterData.WD_LINE["Standard"].map(m => (
+                 <div key={m} className="flex justify-between py-2 text-sm items-center">
+                     <span className={activeModels[m] === false ? 'text-gray-400 line-through' : ''}>{m}</span>
+                     <div className="flex gap-3">
+                         <button onClick={() => toggleModelStatus(m)} className={activeModels[m] !== false ? 'text-green-600' : 'text-gray-300'}>{activeModels[m] !== false ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}</button>
+                         <button onClick={() => handleSettingsDeleteItem('WD_LINE', m)} className="text-red-400"><Trash2 size={14}/></button>
+                     </div>
+                 </div>
+             ))}
+             
+             {/* SAFE RENDER FOR HIERARCHY */}
+             {(settingsGroup === 'CF_LINE' || settingsGroup === 'CRF_MACHINES') && Object.keys(safeGroupData).map(cat => (
+                 <div key={cat} className="mb-4">
+                     <div className="bg-gray-100 p-2 text-xs font-bold rounded flex justify-between items-center text-gray-700">
+                         {cat}
+                         <button onClick={() => handleSettingsDeleteCategory(settingsGroup, cat)} className="text-red-500 hover:bg-red-100 p-1 rounded" title="Delete Group"><Trash2 size={14}/></button>
+                     </div>
+                     {Array.isArray(safeGroupData[cat]) && safeGroupData[cat].map(m => (
+                        <div key={m} className="flex justify-between py-2 pl-2 text-sm border-b border-gray-50 last:border-0 hover:bg-gray-50">
+                            <span className={activeModels[m] === false ? 'text-gray-400 line-through' : ''}>{m}</span>
+                            <div className="flex gap-3">
+                                <button onClick={() => toggleModelStatus(m)} className={activeModels[m] !== false ? 'text-green-600' : 'text-gray-300'}>
+                                   {activeModels[m] !== false ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}</button>
+                                <button onClick={() => handleSettingsDeleteItem(settingsGroup, m, cat)} className="text-red-400"><Trash2 size={14}/></button>
+                            </div>
+                        </div>
+                     ))}
+                 </div>
+             ))}
+          </div>
+      </Card>
+    </div>
+    );
+  };
+
+  const renderContent = () => {
+    switch (view) {
+      case 'entry': return renderEntryScreen();
+      case 'report': return renderReportScreen();
+      case 'plan': return renderPlanScreen();
+      case 'settings': return renderSettingsScreen();
+      default: return renderEntryScreen();
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 font-sans text-gray-900">
+      {renderHeader()}
+      <main>{renderContent()}</main>
+      {notification && <div className="fixed bottom-24 left-1/2 transform -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-xl flex items-center gap-2 z-[60] animate-in fade-in slide-in-from-bottom-4"><CheckCircle2 size={18} /><span className="font-medium text-sm">{notification}</span></div>}
+    </div>
+  );
+}
