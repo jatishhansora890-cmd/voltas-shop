@@ -734,59 +734,48 @@ export default function App() {
     );
   };
 
-  const renderReportScreen = () => {
-    const isCRF = reportArea === 'CRF';
-    return (
-    <div className="p-4 max-w-md mx-auto space-y-6 pb-20">
-      <div className="flex bg-gray-200 p-1 rounded-lg"><button onClick={() => setReportType('flow')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${reportType === 'flow' ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}>Process Flow</button><button onClick={() => setReportType('daily')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${reportType === 'daily' ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}>Production</button><button onClick={() => setReportType('plan')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${reportType === 'plan' ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}>Plan Status</button></div>
-     
-      {reportType === 'flow' && (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
-           <Card className="p-4 bg-white border border-gray-200">
-            <div className="flex justify-between items-start mb-2"><h3 className="text-xs font-bold text-gray-400 uppercase">Flow Configuration</h3><button onClick={() => { const rows = PROCESS_FLOW.mainLine.map((area, idx) => { const actual = processFlowData.areaActuals[area]; const bal = processFlowData.totalPlan - actual; const prev = idx > 0 ? PROCESS_FLOW.mainLine[idx-1] : null; const wip = prev ? (processFlowData.areaActuals[prev] - actual) : 0; return { Area: area, Month_Plan: processFlowData.totalPlan, Actual: actual, Balance: bal, WIP_Stock: wip }; }); exportToCSV(rows, `Process_Flow_${reportMonth}`); }} className="text-blue-600 bg-blue-50 p-1.5 rounded-lg flex items-center gap-1 text-xs font-bold"><Download size={14}/> Export</button></div>
-            {/* UPDATED: Month Filter */}
-            <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs font-bold text-gray-500 mb-1 block">Month</label><input type="month" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div>
-                <div><label className="text-xs font-bold text-gray-500 mb-1 block">Model Filter</label><select value={reportModel} onChange={(e) => setReportModel(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm bg-white"><option value="">All Models</option>{(masterData.CF_LINE ? Object.values(masterData.CF_LINE).flat().sort() : []).map(m => <option key={m} value={m}>{m}</option>)}</select></div>
-            </div>
-          </Card>
-          <div className="space-y-0">
-             <div className="flex items-center gap-2 mb-2 px-1"><GitMerge size={18} className="text-blue-600"/><h3 className="font-bold text-gray-700">Line Status (Monthly)</h3></div>
-             <div className="bg-blue-100 p-3 rounded-t-xl border border-blue-200 text-center"><div className="text-xs font-bold text-blue-600 uppercase">{reportModel ? `Budget (${reportModel})` : 'Total Budget'}</div><div className="text-2xl font-bold text-blue-800">{processFlowData.totalPlan}</div></div>
-             <div className="bg-white border-x border-b border-gray-200 rounded-b-xl p-4 space-y-2">{PROCESS_FLOW.mainLine.map((area, index) => { const actual = processFlowData.areaActuals[area]; const balanceToPlan = processFlowData.totalPlan - actual; const prevArea = index > 0 ? PROCESS_FLOW.mainLine[index - 1] : null; const wip = prevArea ? (processFlowData.areaActuals[prevArea] - actual) : 0; return (<div key={area}>{index > 0 && (<div className="flex items-center justify-center py-2 relative"><ArrowDown size={20} className="text-gray-300" />{wip > 0 ? (<span className="absolute left-[60%] text-xs font-bold text-orange-600 bg-orange-50 px-2 py-0.5 rounded-full border border-orange-100">WIP: {wip}</span>) : (wip < 0 && <span className="absolute left-[60%] text-[10px] text-red-400">Error</span>)}</div>)}<div className={`p-3 rounded-lg border flex justify-between items-center ${area === 'CF final' ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}><div><div className="font-bold text-gray-800 text-sm">{area}</div></div><div className="flex gap-4 text-right"><div><div className="text-[10px] text-gray-400 uppercase">Act</div><div className="font-bold text-gray-900 text-lg">{actual}</div></div><div className="w-px bg-gray-200"></div><div><div className="text-[10px] text-red-400 uppercase">Bal</div><div className="font-bold text-red-600 text-lg">{balanceToPlan}</div></div></div></div></div>); })}</div>
-          </div>
-        </div>
-      )}
+   // --- Block 1: Add this new Hourly Data Logic ---
+  
+  const hourlyReportData = useMemo(() => {
+    // 1. Filter entries for selected Date & Area
+    const filtered = entries.filter(e => e.date === reportDate && e.area === reportArea);
+    
+    // 2. Group by Hour
+    const hoursMap = {}; 
+    let dayTotal = 0;
 
-      {reportType === 'daily' && (
-        <div className="space-y-4">
-           <div className="flex gap-2 mb-2"><button onClick={() => setProductionTimeframe('daily')} className={`flex-1 py-1.5 text-xs font-bold rounded border flex items-center justify-center gap-1 ${productionTimeframe === 'daily' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}><CalendarDays size={14}/> Daily Report</button><button onClick={() => setProductionTimeframe('monthly')} className={`flex-1 py-1.5 text-xs font-bold rounded border flex items-center justify-center gap-1 ${productionTimeframe === 'monthly' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}><Calendar size={14}/> Monthly Report</button></div>
-          <Card className="p-4 space-y-4 bg-white border border-gray-200">
-             <div className="flex justify-between items-center border-b border-gray-100 pb-2"><span className="text-xs font-bold text-gray-400 uppercase">Filter & Export</span><button onClick={() => { const data = productionReportData.rows; const filename = `${productionTimeframe}_Production_${productionTimeframe === 'daily' ? reportDate : reportMonth}`; let cleanData; if (isCRF) { cleanData = data.map(r => ({ Machine: r.machine, Part: r.part, Model: r.model, Qty: r.actual })); } else { cleanData = data.map(r => ({ Model: r.model, Plan: r.plan, Actual: r.actual, Achievement_Percent: r.percent + '%' })); } exportToCSV(cleanData, filename); }} className="text-blue-600 bg-blue-50 p-1.5 rounded-lg flex items-center gap-1 text-xs font-bold"><Download size={14}/> Export Excel</button></div>
-            <div className="grid grid-cols-2 gap-3">{productionTimeframe === 'daily' ? (<div><label className="text-xs font-bold text-gray-500 mb-1 block">Date</label><input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div>) : (<div><label className="text-xs font-bold text-gray-500 mb-1 block">Month</label><input type="month" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div>)}<div><label className="text-xs font-bold text-gray-500 mb-1 block">Area</label><select value={reportArea} onChange={(e) => setReportArea(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm bg-white">{AREAS.map(area => <option key={area} value={area}>{area}</option>)}</select></div></div>
-          </Card>
-          <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200">
-            <thead className="bg-gray-50 border-b border-gray-200 w-full block"><tr className="flex w-full">{isCRF ? (<><th className="p-3 text-xs font-bold text-gray-500 uppercase w-1/3 text-left">Part/Machine</th><th className="p-3 text-xs font-bold text-gray-500 uppercase flex-1 text-left">For Model</th><th className="p-3 text-xs font-bold text-gray-500 uppercase w-20 text-right">Qty</th></>) : (<><th className="p-3 text-xs font-bold text-gray-500 uppercase flex-1 text-left">Model</th><th className="p-3 text-xs font-bold text-gray-500 uppercase flex-1 text-right">{productionTimeframe === 'daily' ? 'D.Plan' : 'M.Budget'}</th><th className="p-3 text-xs font-bold text-gray-500 uppercase flex-1 text-right">Act</th><th className="p-3 text-xs font-bold text-gray-500 uppercase flex-1 text-right">%</th></>)}</tr></thead>
-            <tbody className="divide-y divide-gray-100 block w-full max-h-[400px] overflow-y-auto">{productionReportData.rows.map((row, idx) => (<tr key={idx} className="hover:bg-gray-50 text-sm flex w-full">{isCRF ? (<><td className="p-3 font-medium text-gray-700 w-1/3 text-left"><div className="font-bold">{row.part}</div><div className="text-[10px] text-gray-400">{row.machine}</div></td><td className="p-3 text-gray-600 flex-1 text-left flex items-center">{row.model}</td><td className="p-3 text-right font-bold text-blue-600 w-20">{row.actual}</td></>) : (<><td className="p-3 font-medium text-gray-700 flex-1 text-left">{row.model}</td><td className="p-3 text-right text-gray-400 font-medium flex-1">{row.plan || '-'}</td><td className="p-3 text-right font-bold text-blue-600 flex-1">{row.actual}</td><td className="p-3 text-right flex-1"><span className={`px-2 py-0.5 rounded text-xs font-bold ${row.percent >= 90 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{row.percent}%</span></td></>)}</tr>))}</tbody>
-             <div className="bg-blue-50 p-3 flex justify-between items-center border-t border-blue-100"><span className="text-blue-800 font-bold text-sm">Total {isCRF ? 'Parts' : 'Units'}</span><span className="text-blue-800 font-bold text-lg">{productionReportData.totalActual}</span></div>
-          </div>
-        </div>
-      )}
-     
-      {reportType === 'plan' && (
-         <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
-           <div className="flex gap-2"><button onClick={() => setPlanReportMode('monthly')} className={`flex-1 py-1.5 text-xs font-bold rounded border ${planReportMode === 'monthly' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}>Monthly Budget</button><button onClick={() => setPlanReportMode('range')} className={`flex-1 py-1.5 text-xs font-bold rounded border ${planReportMode === 'range' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}>Date Range</button></div>
-           <Card className="p-4 bg-white border border-gray-200">
-             <div className="flex justify-between items-center mb-2 border-b border-gray-100 pb-2"><span className="text-xs font-bold text-gray-400 uppercase">View & Export</span><button onClick={() => { const filename = planReportMode === 'monthly' ? `Budget_${reportMonth}` : `Plan_${rangeStart}_to_${rangeEnd}`; if (planReportMode === 'monthly') { exportToCSV(planReportData.modelAggregates.map(r => ({ Model: r.model, Monthly_Budget: r.qty })), filename); } else { exportToCSV(planReportData.dailyBreakdown.map(d => ({ Date: d.date, Total_Plan_Qty: d.total })), filename + "_Breakdown"); } }} className="text-blue-600 bg-blue-50 p-1.5 rounded-lg flex items-center gap-1 text-xs font-bold"><Download size={14}/> Export</button></div>
-             {planReportMode === 'monthly' ? (<div className="flex justify-between items-end"><div className="flex-1 mr-4"><label className="text-xs font-bold text-gray-500 mb-1 block">Select Month</label><input type="month" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div><button onClick={() => handleEditPlanFromReport('monthly', reportMonth)} className="bg-blue-600 text-white p-2 rounded-lg mb-0.5"><Pencil size={18} /></button></div>) : (<div className="grid grid-cols-2 gap-3"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Start Date</label><input type="date" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">End Date</label><input type="date" value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div></div>)}
-           </Card>
-           {planReportMode === 'monthly' ? (<div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200"><div className="bg-gray-50 p-3 border-b border-gray-100 font-bold text-gray-700 text-sm">Budget Breakdown ({reportMonth})</div>{planReportData.modelAggregates.length > 0 ? (<table className="w-full text-left"><tbody className="divide-y divide-gray-100">{planReportData.modelAggregates.map((row) => (<tr key={row.model} className="text-sm"><td className="p-3 font-medium text-gray-700">{row.model}</td><td className="p-3 text-right font-bold text-gray-900">{row.qty}</td></tr>))}</tbody></table>) : (<div className="p-4 text-center text-sm text-gray-400">No budget set for this month.</div>)}</div>) : (<div className="space-y-4"><div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200"><div className="bg-purple-50 p-3 border-b border-purple-100 font-bold text-purple-800 text-sm">Total Plan ({rangeStart} to {rangeEnd})</div>{planReportData.modelAggregates.length > 0 ? (<table className="w-full text-left"><tbody className="divide-y divide-gray-100">{planReportData.modelAggregates.map((row) => (<tr key={row.model} className="text-sm"><td className="p-3 font-medium text-gray-700">{row.model}</td><td className="p-3 text-right font-bold text-gray-900">{row.qty}</td></tr>))}</tbody></table>) : (<div className="p-4 text-center text-sm text-gray-400">No plans found in range.</div>)}</div><div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200"><div className="bg-gray-50 p-3 border-b border-gray-100 font-bold text-gray-700 text-sm">Daily Schedule Breakdown</div><div className="divide-y divide-gray-100">{planReportData.dailyBreakdown.map(day => (<div key={day.date} className="flex items-center justify-between p-3 hover:bg-gray-50"><div><div className="font-medium text-gray-800 text-sm">{day.date}</div></div><div className="flex items-center gap-4"><span className="text-sm font-bold text-gray-600">{day.total} units</span><button onClick={() => handleEditPlanFromReport('daily', day.date)} className="text-blue-600 p-1 bg-blue-50 rounded"><Pencil size={14}/></button></div></div>))}</div></div></div>)}
-        </div>
-      )}
-    </div>
-    );
-  };
+    filtered.forEach(entry => {
+        const dateObj = new Date(entry.timestamp);
+        const hour = dateObj.getHours(); // Gets 0-23
+        // Create Label "09:00 - 10:00"
+        const label = `${hour.toString().padStart(2, '0')}:00 - ${(hour + 1).toString().padStart(2, '0')}:00`;
+        
+        if (!hoursMap[label]) hoursMap[label] = 0;
+        
+        // Sum up quantities in this specific entry
+        const entryQty = entry.items.reduce((sum, item) => sum + item.qty, 0);
+        hoursMap[label] += entryQty;
+        dayTotal += entryQty;
+    });
 
+    // 3. Sort by Time and Calculate Cumulative
+    const sortedKeys = Object.keys(hoursMap).sort();
+    let runningTotal = 0;
+    
+    const rows = sortedKeys.map(timeSlot => {
+        const qty = hoursMap[timeSlot];
+        runningTotal += qty;
+        return { 
+            time: timeSlot, 
+            qty: qty, 
+            cumulative: runningTotal,
+            // Calculate intensity for visual bar (percentage of max hour roughly)
+            percent: dayTotal > 0 ? (qty / dayTotal) * 100 : 0 
+        };
+    });
+
+    return { rows, total: dayTotal };
+  }, [entries, reportDate, reportArea]);
   const renderPlanScreen = () => {
     if (!isPlanUnlocked) {
       return (
