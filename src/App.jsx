@@ -25,7 +25,11 @@ import {
   RefreshCw,
   Wifi,
   WifiOff,
-  History
+  History,
+  Clock,         // NEW
+  Bell,          // NEW
+  MessageCircle, // NEW
+  Smartphone     // NEW
 } from 'lucide-react';
 
 // --- Firebase Imports ---
@@ -76,7 +80,6 @@ const PROCESS_FLOW = {
 
 // --- INITIAL DATA (New Hierarchy) ---
 const INITIAL_MASTER_DATA = {
-  // CRF is now hierarchical: Machine -> List of Parts
   CRF_MACHINES: {
     "Komatsu Press": ["Side Panel", "Back Panel", "Bottom Plate"],
     "Thermoforming": ["Inner Liner", "Door Liner"],
@@ -90,6 +93,18 @@ const INITIAL_MASTER_DATA = {
   WD_LINE: {
     "Standard": ["Floor Standing", "Table Top", "Bottom Loading"]
   }
+};
+
+// NEW: Initial Shift Configuration
+const INITIAL_SHIFT_CONFIG = {
+    shifts: [
+        { id: 1, name: "Shift A", start: "08:00", end: "16:00" },
+        { id: 2, name: "Shift B", start: "16:00", end: "00:00" },
+        { id: 3, name: "Shift C", start: "00:00", end: "08:00" }
+    ],
+    supervisors: [
+        { name: "Admin", phone: "", shiftId: 1 }
+    ]
 };
 
 const getDataKeyForArea = (area) => {
@@ -126,6 +141,10 @@ export default function App() {
   const [activeModels, setActiveModels] = useState({});
   const [monthlyPlans, setMonthlyPlans] = useState({});
   const [dailyPlans, setDailyPlans] = useState({});
+  
+  // NEW: Shift Configuration State
+  const [shiftConfig, setShiftConfig] = useState(INITIAL_SHIFT_CONFIG);
+  const [lastNotifiedHour, setLastNotifiedHour] = useState(null);
  
   // Security State
   const [isPlanUnlocked, setIsPlanUnlocked] = useState(false);
@@ -137,10 +156,10 @@ export default function App() {
   const [supervisorName, setSupervisorName] = useState('');
  
   // Selection States
-  const [selectedMachine, setSelectedMachine] = useState(''); // CRF Machine
-  const [selectedSubCategory, setSelectedSubCategory] = useState(''); // CRF Part
-  const [selectedCategory, setSelectedCategory] = useState(''); // Product Category
-  const [selectedModel, setSelectedModel] = useState(''); // Final Model
+  const [selectedMachine, setSelectedMachine] = useState(''); 
+  const [selectedSubCategory, setSelectedSubCategory] = useState(''); 
+  const [selectedCategory, setSelectedCategory] = useState(''); 
+  const [selectedModel, setSelectedModel] = useState(''); 
  
   const [currentQty, setCurrentQty] = useState('');
   const [currentBatch, setCurrentBatch] = useState([]);
@@ -153,10 +172,15 @@ export default function App() {
   const [newItemName, setNewItemName] = useState('');
   const [newCategoryInput, setNewCategoryInput] = useState('');
   const [targetCategoryForModel, setTargetCategoryForModel] = useState('');
+  
+  // Settings: New Shift Inputs
+  const [newSupervisorName, setNewSupervisorName] = useState('');
+  const [newSupervisorPhone, setNewSupervisorPhone] = useState('');
+  const [selectedShiftId, setSelectedShiftId] = useState(1);
 
   // Report State
   const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
-  const [reportMonth, setReportMonth] = useState(new Date().toISOString().slice(0, 7)); // Monthly Filter
+  const [reportMonth, setReportMonth] = useState(new Date().toISOString().slice(0, 7)); 
   
   const [reportArea, setReportArea] = useState(AREAS[0]);
   const [reportType, setReportType] = useState('daily');
@@ -174,7 +198,7 @@ export default function App() {
   const [planDate, setPlanDate] = useState(new Date().toISOString().split('T')[0]);
   const [tempPlanData, setTempPlanData] = useState({});
 
-  // --- Firebase Effects (With Safety Check) ---
+  // --- Firebase Effects ---
 
   useEffect(() => {
     const initAuth = async () => {
@@ -196,6 +220,11 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
 
+    // Request Notification Permission on load
+    if ("Notification" in window && Notification.permission !== "granted") {
+        Notification.requestPermission();
+    }
+
     const entriesRef = collection(db, 'artifacts', appId, 'public', 'data', 'production_entries');
     const unsubEntries = onSnapshot(entriesRef, (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -209,12 +238,8 @@ export default function App() {
             const d = doc.data();
             if (doc.id === 'masterData') {
                 const dbData = d.data;
-                // --- CRITICAL FIX: PREVENT CRASH FROM OLD DATA ---
-                // If the DB has the old Array format for CRF_MACHINES, reset it.
                 if (dbData && Array.isArray(dbData.CRF_MACHINES)) {
-                    console.warn("Old Data Format Detected. Resetting CRF Machines.");
                     setMasterData(INITIAL_MASTER_DATA);
-                    // Auto-fix the DB
                     updateSettingsDoc('masterData', INITIAL_MASTER_DATA); 
                 } else {
                     setMasterData(prev => ({...INITIAL_MASTER_DATA, ...dbData}));
@@ -223,6 +248,8 @@ export default function App() {
             if (doc.id === 'activeModels') setActiveModels(d.data || {});
             if (doc.id === 'monthlyPlans') setMonthlyPlans(d.data || {});
             if (doc.id === 'dailyPlans') setDailyPlans(d.data || {});
+            // Load Shift Config
+            if (doc.id === 'shiftConfig') setShiftConfig(d.data || INITIAL_SHIFT_CONFIG);
         });
     }, (err) => console.error("Settings Sync Error", err));
 
@@ -232,11 +259,39 @@ export default function App() {
     };
   }, [user]);
 
+  // --- NEW: Hourly Notification Logic ---
+  useEffect(() => {
+      const checkHourlyReminder = () => {
+          const now = new Date();
+          const currentHour = now.getHours();
+          const currentMinute = now.getMinutes();
+
+          // Trigger reminder at minute 0 (top of the hour)
+          if (currentMinute === 0 && lastNotifiedHour !== currentHour) {
+              setLastNotifiedHour(currentHour);
+              
+              // 1. Browser Notification (Local)
+              if ("Notification" in window && Notification.permission === "granted") {
+                  new Notification("Voltas Production Reminder", {
+                      body: "It's time to update the hourly production data!",
+                      icon: "/vite.svg" 
+                  });
+              } else {
+                  // Fallback if no permission
+                  showNotification("🔔 Reminder: Update Hourly Report!");
+              }
+          }
+      };
+
+      const interval = setInterval(checkHourlyReminder, 15000); // Check every 15 sec
+      return () => clearInterval(interval);
+  }, [lastNotifiedHour]);
+
   // --- Handlers ---
 
   const showNotification = (msg) => {
     setNotification(msg);
-    setTimeout(() => setNotification(null), 3000);
+    setTimeout(() => setNotification(null), 4000);
   };
 
   const handleUnlockPlan = () => {
@@ -261,23 +316,48 @@ export default function App() {
       await updateSettingsDoc('activeModels', newStatus);
   };
 
-  // --- UPDATED Settings Logic (Hierarchical) ---
+  // --- NEW: Shift Settings Handlers ---
+  const handleAddSupervisor = async () => {
+      if(!newSupervisorName || !newSupervisorPhone) return;
+      const newConfig = { ...shiftConfig };
+      newConfig.supervisors = [...newConfig.supervisors, {
+          name: newSupervisorName,
+          phone: newSupervisorPhone,
+          shiftId: parseInt(selectedShiftId)
+      }];
+      setShiftConfig(newConfig);
+      setNewSupervisorName('');
+      setNewSupervisorPhone('');
+      await updateSettingsDoc('shiftConfig', newConfig);
+      showNotification("Supervisor Added");
+  };
+
+  const handleDeleteSupervisor = async (phone) => {
+      if(!confirm("Remove Supervisor?")) return;
+      const newConfig = { ...shiftConfig };
+      newConfig.supervisors = newConfig.supervisors.filter(s => s.phone !== phone);
+      setShiftConfig(newConfig);
+      await updateSettingsDoc('shiftConfig', newConfig);
+  };
+
+  const handleWhatsAppReminder = (phone, name) => {
+      const text = `Hello ${name}, this is a reminder to update the Voltas Production Hourly Report for the current hour.`;
+      const url = `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
+      window.open(url, '_blank');
+  };
+
+  // --- Settings Logic ---
 
   const handleSettingsAddCategory = async () => {
     if (!newCategoryInput) return;
-    let newMasterData = { ...masterData };
-    
-    // CF_LINE logic
+    let newMasterData = JSON.parse(JSON.stringify(masterData)); 
     if (settingsGroup === 'CF_LINE') {
         if (masterData.CF_LINE[newCategoryInput]) { showNotification("Exists"); return; }
-        newMasterData.CF_LINE = { ...masterData.CF_LINE, [newCategoryInput]: [] };
-    } 
-    // CRF_MACHINES logic (Adding a new Machine Group)
-    else if (settingsGroup === 'CRF_MACHINES') {
+        newMasterData.CF_LINE[newCategoryInput] = [];
+    } else if (settingsGroup === 'CRF_MACHINES') {
         if (masterData.CRF_MACHINES[newCategoryInput]) { showNotification("Exists"); return; }
-        newMasterData.CRF_MACHINES = { ...masterData.CRF_MACHINES, [newCategoryInput]: [] };
+        newMasterData.CRF_MACHINES[newCategoryInput] = [];
     }
-
     setMasterData(newMasterData); 
     setNewCategoryInput(''); 
     await updateSettingsDoc('masterData', newMasterData); 
@@ -286,19 +366,16 @@ export default function App() {
 
   const handleSettingsAddItem = async () => {
     if (!newItemName) return;
-    let newMasterData = { ...masterData };
+    let newMasterData = JSON.parse(JSON.stringify(masterData));
     let newActiveModels = { ...activeModels, [newItemName]: true };
 
     if (settingsGroup === 'CF_LINE') {
         if(!targetCategoryForModel) { showNotification("Select Category"); return; }
         newMasterData.CF_LINE[targetCategoryForModel] = [...newMasterData.CF_LINE[targetCategoryForModel], newItemName];
-    } 
-    else if (settingsGroup === 'CRF_MACHINES') {
-        // Add Part to Machine
+    } else if (settingsGroup === 'CRF_MACHINES') {
         if(!targetCategoryForModel) { showNotification("Select Machine"); return; }
         newMasterData.CRF_MACHINES[targetCategoryForModel] = [...newMasterData.CRF_MACHINES[targetCategoryForModel], newItemName];
-    }
-    else if (settingsGroup === 'WD_LINE') {
+    } else if (settingsGroup === 'WD_LINE') {
         newMasterData.WD_LINE["Standard"] = [...newMasterData.WD_LINE["Standard"], newItemName];
     }
 
@@ -315,7 +392,6 @@ export default function App() {
       let newMasterData = JSON.parse(JSON.stringify(masterData));
       if (group === 'CF_LINE') delete newMasterData.CF_LINE[categoryName];
       if (group === 'CRF_MACHINES') delete newMasterData.CRF_MACHINES[categoryName];
-      
       setMasterData(newMasterData); 
       await updateSettingsDoc('masterData', newMasterData); 
       showNotification("Group Deleted");
@@ -324,17 +400,13 @@ export default function App() {
   const handleSettingsDeleteItem = async (group, item, category = null) => {
     if (!confirm(`Delete ${item}?`)) return;
     let newMasterData = JSON.parse(JSON.stringify(masterData));
-    
     if (group === 'CF_LINE' && category) {
         newMasterData.CF_LINE[category] = newMasterData.CF_LINE[category].filter(i => i !== item);
-    }
-    else if (group === 'CRF_MACHINES' && category) {
+    } else if (group === 'CRF_MACHINES' && category) {
         newMasterData.CRF_MACHINES[category] = newMasterData.CRF_MACHINES[category].filter(i => i !== item);
-    }
-    else if (group === 'WD_LINE') {
+    } else if (group === 'WD_LINE') {
         newMasterData.WD_LINE["Standard"] = (newMasterData.WD_LINE["Standard"] || []).filter(i => i !== item);
     }
-
     setMasterData(newMasterData); 
     await updateSettingsDoc('masterData', newMasterData); 
     showNotification("Deleted");
@@ -344,10 +416,8 @@ export default function App() {
   const handleAddBatchItem = () => {
     const isCRF = activeTab === 'CRF';
     const isWD = getDataKeyForArea(activeTab) === 'WD_LINE';
-    
     if (!currentQty || parseInt(currentQty) <= 0) return;
     
-    // VALIDATION: CRF needs 4 steps
     if (isCRF && (!selectedMachine || !selectedSubCategory || !selectedCategory || !selectedModel)) return;
     if (!isCRF && !selectedModel) return;
 
@@ -361,13 +431,7 @@ export default function App() {
     };
     
     setCurrentBatch([...currentBatch, newItem]);
-    
-    if(isCRF) { 
-      // Reset only Model to speed up entry of same part for diff model
-      setSelectedModel(''); 
-    } else { 
-      setSelectedModel(''); 
-    }
+    if(isCRF) { setSelectedModel(''); } else { setSelectedModel(''); }
     setCurrentQty('');
   };
 
@@ -507,27 +571,21 @@ export default function App() {
   };
 
   const processFlowData = useMemo(() => {
-    // 1. Get Monthly Plan
     const planData = monthlyPlans[reportMonth] || {}; 
-    // 2. Filter Entries by Month
     const periodEntries = entries.filter(e => e.date.startsWith(reportMonth)); 
-    
     const cfModels = masterData.CF_LINE ? Object.values(masterData.CF_LINE).flat() : []; 
     const targetModels = reportModel ? [reportModel] : cfModels;
     
     let totalPlan = 0; 
     targetModels.forEach(m => { if (planData[m]) totalPlan += planData[m]; });
-    
     const areaActuals = {}; 
     AREAS.forEach(area => areaActuals[area] = 0);
-    
     periodEntries.forEach(entry => { 
         if (entry.area === 'CRF') return; 
         entry.items.forEach(item => { 
             if (!reportModel || item.model === reportModel) areaActuals[entry.area] += item.qty; 
         }); 
     });
-    
     return { totalPlan, areaActuals };
   }, [monthlyPlans, entries, reportMonth, reportModel, masterData]);
 
@@ -546,6 +604,37 @@ export default function App() {
       return { modelAggregates: data.sort((a,b) => b.qty - a.qty), dailyBreakdown };
     }
   }, [planReportMode, reportMonth, rangeStart, rangeEnd, monthlyPlans, dailyPlans, masterData]);
+
+  // --- NEW: Hourly Report Logic ---
+  const hourlyReportData = useMemo(() => {
+    const filtered = entries.filter(e => e.date === reportDate && e.area === reportArea);
+    const hoursMap = {}; 
+    let dayTotal = 0;
+
+    filtered.forEach(entry => {
+        const dateObj = new Date(entry.timestamp);
+        const hour = dateObj.getHours(); 
+        const label = `${hour.toString().padStart(2, '0')}:00 - ${(hour + 1).toString().padStart(2, '0')}:00`;
+        if (!hoursMap[label]) hoursMap[label] = 0;
+        const entryQty = entry.items.reduce((sum, item) => sum + item.qty, 0);
+        hoursMap[label] += entryQty;
+        dayTotal += entryQty;
+    });
+
+    const sortedKeys = Object.keys(hoursMap).sort();
+    let runningTotal = 0;
+    const rows = sortedKeys.map(timeSlot => {
+        const qty = hoursMap[timeSlot];
+        runningTotal += qty;
+        return { 
+            time: timeSlot, 
+            qty: qty, 
+            cumulative: runningTotal,
+            percent: dayTotal > 0 ? (qty / dayTotal) * 100 : 0 
+        };
+    });
+    return { rows, total: dayTotal };
+  }, [entries, reportDate, reportArea]);
 
   // --- Renderers ---
 
@@ -568,15 +657,15 @@ export default function App() {
   const renderEntryScreen = () => {
     const isCRF = activeTab === 'CRF';
     const isWD = getDataKeyForArea(activeTab) === 'WD_LINE';
-    
-    // SAFETY CHECK: Ensure CRF Machines is an Object, not Array
-    const safeCRFData = (masterData.CRF_MACHINES && !Array.isArray(masterData.CRF_MACHINES)) 
-        ? masterData.CRF_MACHINES 
-        : {};
-
+    const safeCRFData = (masterData.CRF_MACHINES && !Array.isArray(masterData.CRF_MACHINES)) ? masterData.CRF_MACHINES : {};
     const filterActive = (list) => list.filter(item => activeModels[item] !== false);
-
     const recentEntries = entries.filter(e => e.date === entryDate && e.area === activeTab);
+
+    // NEW: Calculate Current Hour Status
+    const currentHour = new Date().getHours();
+    const currentHourLabel = `${currentHour.toString().padStart(2, '0')}:00 - ${(currentHour + 1).toString().padStart(2, '0')}:00`;
+    const entriesThisHour = recentEntries.filter(e => new Date(e.timestamp).getHours() === currentHour);
+    const qtyThisHour = entriesThisHour.reduce((acc, e) => acc + e.items.reduce((s, i) => s + i.qty, 0), 0);
 
     return (
       <div className="space-y-4 pb-24">
@@ -584,6 +673,16 @@ export default function App() {
           <div className="flex p-2 gap-2 min-w-max">{AREAS.map(area => (<button key={area} onClick={() => { setActiveTab(area); setSelectedCategory(''); setSelectedSubCategory(''); setSelectedModel(''); setSelectedMachine(''); }} className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${activeTab === area ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-50 text-gray-600'}`}>{area}</button>))}</div>
         </div>
         <div className="px-4 space-y-4 max-w-md mx-auto mt-4">
+          
+          {/* NEW: HOURLY STATUS WIDGET */}
+          <div className="bg-gradient-to-r from-blue-600 to-blue-500 rounded-xl p-4 text-white shadow-lg flex items-center justify-between">
+              <div>
+                  <div className="text-xs font-bold text-blue-100 uppercase mb-1 flex items-center gap-1"><Clock size={12}/> Current Hour ({currentHourLabel})</div>
+                  <div className="text-2xl font-bold">{qtyThisHour} <span className="text-sm font-normal text-blue-200">units</span></div>
+              </div>
+              <div className="bg-white/20 p-2 rounded-lg"><BarChart3 size={24} className="text-white"/></div>
+          </div>
+
           <Card className="p-4 border-l-4 border-l-blue-500">
               <div className="flex justify-between items-start">
                   <div className="flex-1">
@@ -597,72 +696,16 @@ export default function App() {
          
           <Card className={`p-4 space-y-4 ${editingId ? 'border-2 border-orange-300 bg-orange-50' : ''}`}>
             <div className="flex items-center justify-between">
-                <h3 className="font-semibold text-gray-700 flex items-center gap-2">
-                    {editingId ? <><Pencil size={16} className="text-orange-600"/> Edit Mode</> : 'Add Production'}
-                </h3>
+                <h3 className="font-semibold text-gray-700 flex items-center gap-2">{editingId ? <><Pencil size={16} className="text-orange-600"/> Edit Mode</> : 'Add Production'}</h3>
                 {editingId && <button onClick={handleCancelEdit} className="text-xs text-red-500 font-bold border border-red-200 px-2 py-1 rounded bg-white">Cancel Edit</button>}
                 {!editingId && <Badge active>{activeTab}</Badge>}
             </div>
            
             <div className="grid grid-cols-1 gap-3">
-              {/* SAFE CRF MACHINE SELECT */}
-              {isCRF && (
-                  <div>
-                    <label className="text-xs text-gray-500 font-semibold mb-1 block">Select Machine</label>
-                    <div className="relative">
-                        <select value={selectedMachine} onChange={(e) => { setSelectedMachine(e.target.value); setSelectedSubCategory(''); }} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 outline-none focus:border-blue-500 appearance-none">
-                            <option value="">Select Machine...</option>
-                            {Object.keys(safeCRFData).map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                        </select>
-                        <ChevronDown className="absolute right-3 top-3.5 text-gray-400 pointer-events-none" size={16} />
-                    </div>
-                  </div>
-              )}
-
-              {/* SAFE CRF PART SELECT */}
-              {isCRF && (
-                  <div className={!selectedMachine ? "opacity-50 pointer-events-none" : ""}>
-                    <label className="text-xs text-gray-500 font-semibold mb-1 block">Select Part</label>
-                    <div className="relative">
-                        <select value={selectedSubCategory} onChange={(e) => setSelectedSubCategory(e.target.value)} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 outline-none focus:border-blue-500 appearance-none">
-                            <option value="">Select Part...</option>
-                            {(selectedMachine && safeCRFData[selectedMachine] ? safeCRFData[selectedMachine] : []).map(opt => (
-                                <option key={opt} value={opt}>{opt}</option>
-                            ))}
-                        </select>
-                        <ChevronDown className="absolute right-3 top-3.5 text-gray-400 pointer-events-none" size={16} />
-                    </div>
-                  </div>
-              )}
-
-              {!isWD && (
-                  <div>
-                      <label className="text-xs text-gray-500 font-semibold mb-1 block">Product Category</label>
-                      <div className="relative">
-                          <select value={selectedCategory} onChange={(e) => { setSelectedCategory(e.target.value); setSelectedModel(''); }} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 outline-none focus:border-blue-500 appearance-none">
-                              <option value="">Select Category...</option>
-                              {Object.keys(masterData.CF_LINE).map(opt => <option key={opt} value={opt}>{opt}</option>)}
-                          </select>
-                          <ChevronDown className="absolute right-3 top-3.5 text-gray-400 pointer-events-none" size={16} />
-                      </div>
-                  </div>
-              )}
-
-              {(selectedCategory || isWD) && (
-                  <div className="animate-in fade-in slide-in-from-top-2 duration-300">
-                    <label className="text-xs text-gray-500 font-semibold mb-1 block">{isCRF ? 'For Model (Target)' : 'Model'}</label>
-                    <div className="relative">
-                        <select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 outline-none focus:border-blue-500 appearance-none">
-                            <option value="">Select Model</option>
-                            {filterActive(isWD ? masterData.WD_LINE["Standard"] : (masterData.CF_LINE[selectedCategory] || [])).map(model => (
-                                <option key={model} value={model}>{model}</option>
-                            ))}
-                        </select>
-                        <ChevronDown className="absolute right-3 top-3.5 text-gray-400 pointer-events-none" size={16} />
-                    </div>
-                  </div>
-              )}
-
+              {isCRF && (<div><label className="text-xs text-gray-500 font-semibold mb-1 block">Select Machine</label><div className="relative"><select value={selectedMachine} onChange={(e) => { setSelectedMachine(e.target.value); setSelectedSubCategory(''); }} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 outline-none focus:border-blue-500 appearance-none"><option value="">Select Machine...</option>{Object.keys(safeCRFData).map(opt => <option key={opt} value={opt}>{opt}</option>)}</select><ChevronDown className="absolute right-3 top-3.5 text-gray-400 pointer-events-none" size={16} /></div></div>)}
+              {isCRF && (<div className={!selectedMachine ? "opacity-50 pointer-events-none" : ""}><label className="text-xs text-gray-500 font-semibold mb-1 block">Select Part</label><div className="relative"><select value={selectedSubCategory} onChange={(e) => setSelectedSubCategory(e.target.value)} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 outline-none focus:border-blue-500 appearance-none"><option value="">Select Part...</option>{(selectedMachine && safeCRFData[selectedMachine] ? safeCRFData[selectedMachine] : []).map(opt => (<option key={opt} value={opt}>{opt}</option>))}</select><ChevronDown className="absolute right-3 top-3.5 text-gray-400 pointer-events-none" size={16} /></div></div>)}
+              {!isWD && (<div><label className="text-xs text-gray-500 font-semibold mb-1 block">Product Category</label><div className="relative"><select value={selectedCategory} onChange={(e) => { setSelectedCategory(e.target.value); setSelectedModel(''); }} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 outline-none focus:border-blue-500 appearance-none"><option value="">Select Category...</option>{Object.keys(masterData.CF_LINE).map(opt => <option key={opt} value={opt}>{opt}</option>)}</select><ChevronDown className="absolute right-3 top-3.5 text-gray-400 pointer-events-none" size={16} /></div></div>)}
+              {(selectedCategory || isWD) && (<div className="animate-in fade-in slide-in-from-top-2 duration-300"><label className="text-xs text-gray-500 font-semibold mb-1 block">{isCRF ? 'For Model (Target)' : 'Model'}</label><div className="relative"><select value={selectedModel} onChange={(e) => setSelectedModel(e.target.value)} className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 outline-none focus:border-blue-500 appearance-none"><option value="">Select Model</option>{filterActive(isWD ? masterData.WD_LINE["Standard"] : (masterData.CF_LINE[selectedCategory] || [])).map(model => (<option key={model} value={model}>{model}</option>))}</select><ChevronDown className="absolute right-3 top-3.5 text-gray-400 pointer-events-none" size={16} /></div></div>)}
               <div className="flex gap-3 items-end"><div className="flex-1"><label className="text-xs text-gray-500 font-semibold mb-1 block">Quantity</label><input type="number" value={currentQty} onChange={(e) => setCurrentQty(e.target.value)} placeholder="0" className="w-full p-3 bg-gray-50 rounded-lg border border-gray-200 outline-none focus:border-blue-500" /></div><button onClick={handleAddBatchItem} className="bg-blue-600 text-white p-3 rounded-lg font-medium flex items-center gap-2"><Plus size={20} /> Add</button></div>
             </div>
           </Card>
@@ -697,13 +740,21 @@ export default function App() {
     const isCRF = reportArea === 'CRF';
     return (
     <div className="p-4 max-w-md mx-auto space-y-6 pb-20">
-      <div className="flex bg-gray-200 p-1 rounded-lg"><button onClick={() => setReportType('flow')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${reportType === 'flow' ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}>Process Flow</button><button onClick={() => setReportType('daily')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${reportType === 'daily' ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}>Production</button><button onClick={() => setReportType('plan')} className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${reportType === 'plan' ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}>Plan Status</button></div>
+      
+      {/* Navigation Tabs */}
+      <div className="flex bg-gray-200 p-1 rounded-lg overflow-x-auto no-scrollbar">
+          {['flow', 'daily', 'hourly', 'plan'].map(t => (
+             <button key={t} onClick={() => setReportType(t)} className={`flex-1 py-2 px-3 text-xs font-bold rounded-md transition-all whitespace-nowrap capitalize ${reportType === t ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}>
+                {t === 'flow' ? 'Process Flow' : t === 'daily' ? 'Production' : t === 'hourly' ? 'Hourly' : 'Plan Status'}
+             </button>
+          ))}
+      </div>
      
+      {/* 1. PROCESS FLOW VIEW */}
       {reportType === 'flow' && (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
            <Card className="p-4 bg-white border border-gray-200">
             <div className="flex justify-between items-start mb-2"><h3 className="text-xs font-bold text-gray-400 uppercase">Flow Configuration</h3><button onClick={() => { const rows = PROCESS_FLOW.mainLine.map((area, idx) => { const actual = processFlowData.areaActuals[area]; const bal = processFlowData.totalPlan - actual; const prev = idx > 0 ? PROCESS_FLOW.mainLine[idx-1] : null; const wip = prev ? (processFlowData.areaActuals[prev] - actual) : 0; return { Area: area, Month_Plan: processFlowData.totalPlan, Actual: actual, Balance: bal, WIP_Stock: wip }; }); exportToCSV(rows, `Process_Flow_${reportMonth}`); }} className="text-blue-600 bg-blue-50 p-1.5 rounded-lg flex items-center gap-1 text-xs font-bold"><Download size={14}/> Export</button></div>
-            {/* UPDATED: Month Filter */}
             <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-bold text-gray-500 mb-1 block">Month</label><input type="month" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div>
                 <div><label className="text-xs font-bold text-gray-500 mb-1 block">Model Filter</label><select value={reportModel} onChange={(e) => setReportModel(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm bg-white"><option value="">All Models</option>{(masterData.CF_LINE ? Object.values(masterData.CF_LINE).flat().sort() : []).map(m => <option key={m} value={m}>{m}</option>)}</select></div>
@@ -717,6 +768,7 @@ export default function App() {
         </div>
       )}
 
+      {/* 2. DAILY / MONTHLY PRODUCTION VIEW */}
       {reportType === 'daily' && (
         <div className="space-y-4">
            <div className="flex gap-2 mb-2"><button onClick={() => setProductionTimeframe('daily')} className={`flex-1 py-1.5 text-xs font-bold rounded border flex items-center justify-center gap-1 ${productionTimeframe === 'daily' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}><CalendarDays size={14}/> Daily Report</button><button onClick={() => setProductionTimeframe('monthly')} className={`flex-1 py-1.5 text-xs font-bold rounded border flex items-center justify-center gap-1 ${productionTimeframe === 'monthly' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}><Calendar size={14}/> Monthly Report</button></div>
@@ -731,7 +783,52 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* 3. NEW HOURLY REPORT VIEW */}
+      {reportType === 'hourly' && (
+        <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
+           <Card className="p-4 bg-white border border-gray-200">
+             <div className="flex justify-between items-center border-b border-gray-100 pb-2 mb-3">
+                 <span className="text-xs font-bold text-gray-400 uppercase">Hourly Filters</span>
+                 <button onClick={() => exportToCSV(hourlyReportData.rows, `Hourly_${reportArea}_${reportDate}`)} className="text-blue-600 bg-blue-50 p-1.5 rounded-lg flex items-center gap-1 text-xs font-bold"><Download size={14}/> Export</button>
+             </div>
+             <div className="grid grid-cols-2 gap-3">
+                 <div><label className="text-xs font-bold text-gray-500 mb-1 block">Date</label><input type="date" value={reportDate} onChange={(e) => setReportDate(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div>
+                 <div><label className="text-xs font-bold text-gray-500 mb-1 block">Area</label><select value={reportArea} onChange={(e) => setReportArea(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm bg-white">{AREAS.map(area => <option key={area} value={area}>{area}</option>)}</select></div>
+             </div>
+           </Card>
+
+           <div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200">
+              <div className="bg-gray-50 p-3 border-b border-gray-200 flex justify-between items-center">
+                  <span className="text-sm font-bold text-gray-700">Hourly Output</span>
+                  <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full font-bold">Total: {hourlyReportData.total}</span>
+              </div>
+              
+              {hourlyReportData.rows.length === 0 ? (
+                  <div className="p-8 text-center text-gray-400 text-sm">No production data for this date.</div>
+              ) : (
+                  <div className="divide-y divide-gray-100">
+                      {hourlyReportData.rows.map((row, idx) => (
+                          <div key={idx} className="p-3 hover:bg-gray-50 transition-colors">
+                              <div className="flex justify-between items-center mb-1">
+                                  <div className="text-sm font-bold text-gray-800">{row.time}</div>
+                                  <div className="flex gap-4 text-sm">
+                                      <div className="text-gray-500"><span className="text-xs uppercase mr-1">Qty:</span><span className="font-bold text-gray-900">{row.qty}</span></div>
+                                      <div className="text-blue-600"><span className="text-xs uppercase mr-1">Cum:</span><span className="font-bold">{row.cumulative}</span></div>
+                                  </div>
+                              </div>
+                              <div className="w-full bg-gray-100 rounded-full h-1.5 mt-1 overflow-hidden">
+                                  <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${Math.min(row.percent * 2, 100)}%` }}></div>
+                              </div>
+                          </div>
+                      ))}
+                  </div>
+              )}
+           </div>
+        </div>
+      )}
      
+      {/* 4. PLAN REPORT VIEW */}
       {reportType === 'plan' && (
          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
            <div className="flex gap-2"><button onClick={() => setPlanReportMode('monthly')} className={`flex-1 py-1.5 text-xs font-bold rounded border ${planReportMode === 'monthly' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}>Monthly Budget</button><button onClick={() => setPlanReportMode('range')} className={`flex-1 py-1.5 text-xs font-bold rounded border ${planReportMode === 'range' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}>Date Range</button></div>
@@ -785,7 +882,6 @@ export default function App() {
   };
 
   const renderSettingsScreen = () => {
-    // Safety Wrapper
     const getSafeGroupData = (groupKey) => {
         const data = masterData[groupKey];
         if (!data || Array.isArray(data)) return {};
@@ -797,6 +893,38 @@ export default function App() {
      <div className="p-4 max-w-md mx-auto space-y-6 pb-20">
       <div className="bg-white p-4 rounded-xl border-l-4 border-blue-600 shadow-sm"><h2 className="font-bold text-gray-800 flex items-center gap-2"><Settings size={20} className="text-blue-600" /> Plant Configuration</h2></div>
      
+      {/* NEW: Shift Configuration Section */}
+      <Card className="p-4 bg-purple-50 border-purple-100">
+          <h3 className="font-bold text-purple-800 text-sm mb-3 flex items-center gap-2"><User size={16}/> Supervisor Notifications</h3>
+          
+          {/* Add Supervisor Form */}
+          <div className="mb-4 space-y-2">
+              <input type="text" placeholder="Supervisor Name" value={newSupervisorName} onChange={e => setNewSupervisorName(e.target.value)} className="w-full p-2 text-sm border rounded" />
+              <div className="flex gap-2">
+                  <input type="tel" placeholder="Mobile Number (with Country Code)" value={newSupervisorPhone} onChange={e => setNewSupervisorPhone(e.target.value)} className="flex-1 p-2 text-sm border rounded" />
+                  <button onClick={handleAddSupervisor} className="bg-purple-600 text-white px-3 rounded"><Plus size={18}/></button>
+              </div>
+          </div>
+
+          <div className="divide-y divide-purple-200/50">
+              {shiftConfig.supervisors.map((sup, idx) => (
+                  <div key={idx} className="flex justify-between items-center py-2">
+                      <div>
+                          <div className="font-bold text-sm text-gray-800">{sup.name}</div>
+                          <div className="text-xs text-gray-500">{sup.phone}</div>
+                      </div>
+                      <div className="flex gap-2">
+                          <button onClick={() => handleWhatsAppReminder(sup.phone, sup.name)} className="bg-green-500 text-white p-1.5 rounded-full" title="Send WhatsApp Reminder"><MessageCircle size={14}/></button>
+                          <button onClick={() => handleDeleteSupervisor(sup.phone)} className="text-red-400 p-1.5"><Trash2 size={14}/></button>
+                      </div>
+                  </div>
+              ))}
+          </div>
+          <div className="mt-2 text-[10px] text-purple-600 italic">
+              * Hourly reminders will appear as browser notifications automatically. Use the WhatsApp button for manual follow-up.
+          </div>
+      </Card>
+
       <div className="grid grid-cols-2 gap-2 mb-2">
          <button onClick={() => { setSettingsGroup('CF_LINE'); setTargetCategoryForModel(''); }} className={`p-2 rounded-lg text-xs font-bold border ${settingsGroup === 'CF_LINE' ? 'bg-blue-600 text-white' : 'bg-white'}`}>Assembly Models</button>
          <button onClick={() => { setSettingsGroup('WD_LINE'); setTargetCategoryForModel(''); }} className={`p-2 rounded-lg text-xs font-bold border ${settingsGroup === 'WD_LINE' ? 'bg-blue-600 text-white' : 'bg-white'}`}>Water Dispenser</button>
@@ -805,7 +933,6 @@ export default function App() {
          <button onClick={() => { setSettingsGroup('CRF_MACHINES'); setTargetCategoryForModel(''); }} className={`p-2 rounded-lg text-xs font-bold border ${settingsGroup === 'CRF_MACHINES' ? 'bg-blue-600 text-white' : 'bg-white'}`}>CRF Machines & Parts</button>
       </div>
 
-      {/* Safety Warning */}
       {(settingsGroup === 'CRF_MACHINES' && Array.isArray(masterData.CRF_MACHINES)) && (
           <div className="bg-red-50 p-3 rounded text-red-600 text-xs font-bold border border-red-200">
               ⚠️ Old Data Format Detected. Please refresh to auto-fix.
