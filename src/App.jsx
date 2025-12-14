@@ -26,10 +26,10 @@ import {
   Wifi,
   WifiOff,
   History,
-  Clock,
-  Bell,
-  MessageCircle,
-  Smartphone
+  Clock,         // NEW
+  Bell,          // NEW
+  MessageCircle, // NEW
+  Smartphone     // NEW
 } from 'lucide-react';
 
 // --- Firebase Imports ---
@@ -95,6 +95,7 @@ const INITIAL_MASTER_DATA = {
   }
 };
 
+// NEW: Initial Shift Configuration
 const INITIAL_SHIFT_CONFIG = {
     shifts: [
         { id: 1, name: "Shift A", start: "08:00", end: "16:00" },
@@ -141,13 +142,12 @@ export default function App() {
   const [monthlyPlans, setMonthlyPlans] = useState({});
   const [dailyPlans, setDailyPlans] = useState({});
   
-  // Shift Config State
+  // NEW: Shift Configuration State
   const [shiftConfig, setShiftConfig] = useState(INITIAL_SHIFT_CONFIG);
   const [lastNotifiedHour, setLastNotifiedHour] = useState(null);
  
   // Security State
   const [isPlanUnlocked, setIsPlanUnlocked] = useState(false);
-  const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(false); // NEW: Settings Lock State
   const [passwordInput, setPasswordInput] = useState('');
 
   // Entry Form State
@@ -220,7 +220,7 @@ export default function App() {
   useEffect(() => {
     if (!user) return;
 
-    // Request Notification Permission
+    // Request Notification Permission on load
     if ("Notification" in window && Notification.permission !== "granted") {
         Notification.requestPermission();
     }
@@ -248,6 +248,7 @@ export default function App() {
             if (doc.id === 'activeModels') setActiveModels(d.data || {});
             if (doc.id === 'monthlyPlans') setMonthlyPlans(d.data || {});
             if (doc.id === 'dailyPlans') setDailyPlans(d.data || {});
+            // Load Shift Config
             if (doc.id === 'shiftConfig') setShiftConfig(d.data || INITIAL_SHIFT_CONFIG);
         });
     }, (err) => console.error("Settings Sync Error", err));
@@ -258,27 +259,31 @@ export default function App() {
     };
   }, [user]);
 
-  // --- Hourly Notification Logic ---
+  // --- NEW: Hourly Notification Logic ---
   useEffect(() => {
       const checkHourlyReminder = () => {
           const now = new Date();
           const currentHour = now.getHours();
           const currentMinute = now.getMinutes();
 
+          // Trigger reminder at minute 0 (top of the hour)
           if (currentMinute === 0 && lastNotifiedHour !== currentHour) {
               setLastNotifiedHour(currentHour);
+              
+              // 1. Browser Notification (Local)
               if ("Notification" in window && Notification.permission === "granted") {
                   new Notification("Voltas Production Reminder", {
                       body: "It's time to update the hourly production data!",
                       icon: "/vite.svg" 
                   });
               } else {
+                  // Fallback if no permission
                   showNotification("🔔 Reminder: Update Hourly Report!");
               }
           }
       };
 
-      const interval = setInterval(checkHourlyReminder, 15000); 
+      const interval = setInterval(checkHourlyReminder, 15000); // Check every 15 sec
       return () => clearInterval(interval);
   }, [lastNotifiedHour]);
 
@@ -299,17 +304,6 @@ export default function App() {
     }
   };
 
-  // NEW: Settings Unlock Handler
-  const handleUnlockSettings = () => {
-    if (passwordInput === '1234') {
-      setIsSettingsUnlocked(true);
-      setPasswordInput('');
-      showNotification("Settings Unlocked");
-    } else {
-      showNotification("Incorrect Password");
-    }
-  };
-
   const updateSettingsDoc = async (docId, newData) => {
       if (!user) return;
       const ref = doc(db, 'artifacts', appId, 'public', 'data', 'app_settings', docId);
@@ -322,7 +316,7 @@ export default function App() {
       await updateSettingsDoc('activeModels', newStatus);
   };
 
-  // --- Shift Settings Handlers ---
+  // --- NEW: Shift Settings Handlers ---
   const handleAddSupervisor = async () => {
       if(!newSupervisorName || !newSupervisorPhone) return;
       const newConfig = { ...shiftConfig };
@@ -611,7 +605,7 @@ export default function App() {
     }
   }, [planReportMode, reportMonth, rangeStart, rangeEnd, monthlyPlans, dailyPlans, masterData]);
 
-  // --- Hourly Report Logic ---
+  // --- NEW: Hourly Report Logic ---
   const hourlyReportData = useMemo(() => {
     const filtered = entries.filter(e => e.date === reportDate && e.area === reportArea);
     const hoursMap = {}; 
@@ -652,7 +646,7 @@ export default function App() {
           {dbStatus === 'connected' ? <Wifi size={16} className="text-green-300"/> : <WifiOff size={16} className="text-red-300"/>}
           {['entry', 'report', 'plan', 'settings'].map(m => (
             <button key={m} onClick={() => setView(m)} className={`p-2 rounded-full transition-all ${view === m ? 'bg-white text-blue-700' : 'bg-blue-600 text-blue-100'}`}>
-              {m === 'entry' && <PenTool size={18} />}{m === 'report' && <BarChart3 size={18} />}{m === 'plan' && (isPlanUnlocked ? <Unlock size={18} /> : <Lock size={18} />)}{m === 'settings' && (isSettingsUnlocked ? <Unlock size={18}/> : <Settings size={18} />)}
+              {m === 'entry' && <PenTool size={18} />}{m === 'report' && <BarChart3 size={18} />}{m === 'plan' && (isPlanUnlocked ? <Unlock size={18} /> : <Lock size={18} />)}{m === 'settings' && <Settings size={18} />}
             </button>
           ))}
         </div>
@@ -667,7 +661,7 @@ export default function App() {
     const filterActive = (list) => list.filter(item => activeModels[item] !== false);
     const recentEntries = entries.filter(e => e.date === entryDate && e.area === activeTab);
 
-    // Calculate Current Hour Status
+    // NEW: Calculate Current Hour Status
     const currentHour = new Date().getHours();
     const currentHourLabel = `${currentHour.toString().padStart(2, '0')}:00 - ${(currentHour + 1).toString().padStart(2, '0')}:00`;
     const entriesThisHour = recentEntries.filter(e => new Date(e.timestamp).getHours() === currentHour);
@@ -680,7 +674,7 @@ export default function App() {
         </div>
         <div className="px-4 space-y-4 max-w-md mx-auto mt-4">
           
-          {/* HOURLY STATUS WIDGET */}
+          {/* NEW: HOURLY STATUS WIDGET */}
           <div className="bg-gradient-to-r from-blue-600 to-blue-500 rounded-xl p-4 text-white shadow-lg flex items-center justify-between">
               <div>
                   <div className="text-xs font-bold text-blue-100 uppercase mb-1 flex items-center gap-1"><Clock size={12}/> Current Hour ({currentHourLabel})</div>
@@ -747,6 +741,7 @@ export default function App() {
     return (
     <div className="p-4 max-w-md mx-auto space-y-6 pb-20">
       
+      {/* Navigation Tabs */}
       <div className="flex bg-gray-200 p-1 rounded-lg overflow-x-auto no-scrollbar">
           {['flow', 'daily', 'hourly', 'plan'].map(t => (
              <button key={t} onClick={() => setReportType(t)} className={`flex-1 py-2 px-3 text-xs font-bold rounded-md transition-all whitespace-nowrap capitalize ${reportType === t ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}>
@@ -755,6 +750,7 @@ export default function App() {
           ))}
       </div>
      
+      {/* 1. PROCESS FLOW VIEW */}
       {reportType === 'flow' && (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
            <Card className="p-4 bg-white border border-gray-200">
@@ -772,6 +768,7 @@ export default function App() {
         </div>
       )}
 
+      {/* 2. DAILY / MONTHLY PRODUCTION VIEW */}
       {reportType === 'daily' && (
         <div className="space-y-4">
            <div className="flex gap-2 mb-2"><button onClick={() => setProductionTimeframe('daily')} className={`flex-1 py-1.5 text-xs font-bold rounded border flex items-center justify-center gap-1 ${productionTimeframe === 'daily' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}><CalendarDays size={14}/> Daily Report</button><button onClick={() => setProductionTimeframe('monthly')} className={`flex-1 py-1.5 text-xs font-bold rounded border flex items-center justify-center gap-1 ${productionTimeframe === 'monthly' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}><Calendar size={14}/> Monthly Report</button></div>
@@ -787,6 +784,7 @@ export default function App() {
         </div>
       )}
 
+      {/* 3. NEW HOURLY REPORT VIEW */}
       {reportType === 'hourly' && (
         <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
            <Card className="p-4 bg-white border border-gray-200">
@@ -805,6 +803,7 @@ export default function App() {
                   <span className="text-sm font-bold text-gray-700">Hourly Output</span>
                   <span className="text-xs bg-green-100 text-green-800 px-2 py-1 rounded-full font-bold">Total: {hourlyReportData.total}</span>
               </div>
+              
               {hourlyReportData.rows.length === 0 ? (
                   <div className="p-8 text-center text-gray-400 text-sm">No production data for this date.</div>
               ) : (
@@ -829,6 +828,7 @@ export default function App() {
         </div>
       )}
      
+      {/* 4. PLAN REPORT VIEW */}
       {reportType === 'plan' && (
          <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
            <div className="flex gap-2"><button onClick={() => setPlanReportMode('monthly')} className={`flex-1 py-1.5 text-xs font-bold rounded border ${planReportMode === 'monthly' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}>Monthly Budget</button><button onClick={() => setPlanReportMode('range')} className={`flex-1 py-1.5 text-xs font-bold rounded border ${planReportMode === 'range' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}>Date Range</button></div>
@@ -843,18 +843,45 @@ export default function App() {
     );
   };
 
-  const renderSettingsScreen = () => {
-    // Lock Check
-    if (!isSettingsUnlocked) {
-        return (
-            <div className="p-8 max-w-md mx-auto flex flex-col items-center justify-center min-h-[60vh] space-y-6">
-              <div className="bg-gray-100 p-6 rounded-full"><Lock size={48} className="text-gray-600" /></div>
-              <div className="text-center"><h2 className="text-xl font-bold text-gray-800">Settings Locked</h2><p className="text-sm text-gray-500 mt-1">Enter Admin PIN</p></div>
-              <div className="w-full max-w-xs space-y-4"><input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} placeholder="Enter PIN" className="w-full text-center text-2xl tracking-widest p-3 border rounded-lg focus:border-blue-500 outline-none" maxLength={4} /><button onClick={handleUnlockSettings} className="w-full bg-gray-800 text-white py-3 rounded-lg font-bold hover:bg-gray-700">Unlock Settings</button></div>
-            </div>
-        );
+  const renderPlanScreen = () => {
+    if (!isPlanUnlocked) {
+      return (
+        <div className="p-8 max-w-md mx-auto flex flex-col items-center justify-center min-h-[60vh] space-y-6">
+          <div className="bg-blue-100 p-6 rounded-full"><Lock size={48} className="text-blue-600" /></div>
+          <div className="text-center"><h2 className="text-xl font-bold text-gray-800">Plan Locked</h2><p className="text-sm text-gray-500 mt-1">Enter PIN to edit targets</p></div>
+          <div className="w-full max-w-xs space-y-4"><input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} placeholder="Enter PIN" className="w-full text-center text-2xl tracking-widest p-3 border rounded-lg focus:border-blue-500 outline-none" maxLength={4} /><button onClick={handleUnlockPlan} className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold hover:bg-blue-700">Unlock</button><p className="text-center text-xs text-gray-400">Default PIN: 1234</p></div>
+        </div>
+      );
     }
+    return (
+      <div className="p-4 max-w-md mx-auto space-y-6 pb-24">
+        <div className="flex items-center justify-between mb-2"><h2 className="text-lg font-bold text-gray-700">Set Targets</h2><button onClick={() => setIsPlanUnlocked(false)} className="text-xs text-red-500 font-bold flex items-center gap-1 border border-red-100 px-2 py-1 rounded bg-red-50"><Lock size={12}/> Lock</button></div>
+        <div className="flex bg-gray-200 p-1 rounded-lg"><button onClick={() => setPlanMode('daily')} className={`flex-1 py-2 text-sm font-bold rounded-md flex justify-center items-center gap-2 transition-all ${planMode === 'daily' ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}><CalendarDays size={16} /> Daily</button><button onClick={() => setPlanMode('monthly')} className={`flex-1 py-2 text-sm font-bold rounded-md flex justify-center items-center gap-2 transition-all ${planMode === 'monthly' ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}><Target size={16} /> Monthly</button></div>
+        <Card className="p-4 bg-blue-50 border-blue-100"><label className="text-xs font-bold text-blue-600 mb-1 block">{planMode === 'monthly' ? 'Select Month' : 'Select Date'}</label>{planMode === 'monthly' ? <input type="month" value={planMonth} onChange={(e) => setPlanMonth(e.target.value)} className="w-full p-2 rounded border border-blue-200 text-sm" /> : <input type="date" value={planDate} onChange={(e) => setPlanDate(e.target.value)} className="w-full p-2 rounded border border-blue-200 text-sm" />}</Card>
+        <div className="space-y-4">
+           {['CF_LINE', 'WD_LINE'].map(groupKey => {
+               const group = masterData[groupKey];
+               return Object.entries(group).map(([cat, models]) => (
+                   <Card key={cat} className="overflow-hidden mb-3">
+                       <div className="bg-gray-50 p-2 border-b border-gray-100 font-bold text-gray-700 text-xs uppercase">{cat}</div>
+                       <div className="divide-y divide-gray-100 p-2">
+                           {models.map(model => (
+                               <div key={model} className="flex items-center justify-between p-2">
+                                   <span className="text-sm font-medium text-gray-700">{model}</span>
+                                   <input type="number" placeholder="Plan" value={tempPlanData[model] || ''} onChange={(e) => handlePlanInputChange(model, e.target.value)} className="w-20 p-2 text-right border rounded bg-gray-50 focus:bg-white outline-none focus:border-blue-500" />
+                               </div>
+                           ))}
+                       </div>
+                   </Card>
+               ))
+           })}
+        </div>
+        <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-100 shadow-lg z-50"><div className="max-w-md mx-auto"><button onClick={handleSavePlan} className="w-full py-3.5 rounded-xl font-bold text-lg flex items-center justify-center gap-2 bg-blue-600 text-white hover:bg-blue-700 shadow-lg active:scale-95 transition-all"><Save size={20} /> Save Plan</button></div></div>
+      </div>
+    );
+  };
 
+  const renderSettingsScreen = () => {
     const getSafeGroupData = (groupKey) => {
         const data = masterData[groupKey];
         if (!data || Array.isArray(data)) return {};
@@ -864,21 +891,17 @@ export default function App() {
 
     return (
      <div className="p-4 max-w-md mx-auto space-y-6 pb-20">
-      
-      {/* Header with Lock Button */}
-      <div className="bg-white p-4 rounded-xl border-l-4 border-blue-600 shadow-sm flex justify-between items-center">
-          <h2 className="font-bold text-gray-800 flex items-center gap-2"><Settings size={20} className="text-blue-600" /> Plant Configuration</h2>
-          <button onClick={() => setIsSettingsUnlocked(false)} className="text-xs text-red-500 font-bold flex items-center gap-1 border border-red-100 px-2 py-1 rounded bg-red-50"><Lock size={12}/> Lock</button>
-      </div>
+      <div className="bg-white p-4 rounded-xl border-l-4 border-blue-600 shadow-sm"><h2 className="font-bold text-gray-800 flex items-center gap-2"><Settings size={20} className="text-blue-600" /> Plant Configuration</h2></div>
      
-      {/* Shift Configuration Section */}
+      {/* NEW: Shift Configuration Section */}
       <Card className="p-4 bg-purple-50 border-purple-100">
           <h3 className="font-bold text-purple-800 text-sm mb-3 flex items-center gap-2"><User size={16}/> Supervisor Notifications</h3>
           
+          {/* Add Supervisor Form */}
           <div className="mb-4 space-y-2">
-              <input type="text" placeholder="Supervisor Name" value={newSupervisorName} onChange={e => setNewSupervisorName(e.target.value)} className="w-full p-2 text-sm border rounded bg-white" />
+              <input type="text" placeholder="Supervisor Name" value={newSupervisorName} onChange={e => setNewSupervisorName(e.target.value)} className="w-full p-2 text-sm border rounded" />
               <div className="flex gap-2">
-                  <input type="tel" placeholder="Mobile (with Country Code)" value={newSupervisorPhone} onChange={e => setNewSupervisorPhone(e.target.value)} className="flex-1 p-2 text-sm border rounded bg-white" />
+                  <input type="tel" placeholder="Mobile Number (with Country Code)" value={newSupervisorPhone} onChange={e => setNewSupervisorPhone(e.target.value)} className="flex-1 p-2 text-sm border rounded" />
                   <button onClick={handleAddSupervisor} className="bg-purple-600 text-white px-3 rounded"><Plus size={18}/></button>
               </div>
           </div>
