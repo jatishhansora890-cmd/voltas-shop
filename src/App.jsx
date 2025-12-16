@@ -29,7 +29,9 @@ import {
   Clock,
   MessageCircle,
   FileSpreadsheet,
-  Filter
+  Filter,
+  Share2,  // NEW ICON
+  X        // NEW ICON
 } from 'lucide-react';
 
 // --- Firebase Imports ---
@@ -187,7 +189,7 @@ export default function App() {
   const [rangeStart, setRangeStart] = useState(new Date().toISOString().split('T')[0]);
   const [rangeEnd, setRangeEnd] = useState(new Date().toISOString().split('T')[0]);
 
-  // NEW: Advanced Export Filters State
+  // Advanced Export Filters State
   const [exportRangeStart, setExportRangeStart] = useState(new Date().toISOString().split('T')[0]);
   const [exportRangeEnd, setExportRangeEnd] = useState(new Date().toISOString().split('T')[0]);
   const [exportSupervisor, setExportSupervisor] = useState('');
@@ -198,6 +200,10 @@ export default function App() {
   const [planMonth, setPlanMonth] = useState(new Date().toISOString().slice(0, 7));
   const [planDate, setPlanDate] = useState(new Date().toISOString().split('T')[0]);
   const [tempPlanData, setTempPlanData] = useState({});
+
+  // NEW: End Shift Report State
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [reportParams, setReportParams] = useState({ shift: 'General Shift', manpower: '', losses: '' });
 
   // --- Firebase Effects ---
 
@@ -501,121 +507,107 @@ export default function App() {
     const link = document.createElement('a'); const url = URL.createObjectURL(blob); link.setAttribute('href', url); link.setAttribute('download', `${filename}.csv`); document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
-  // --- GENERATE MATRIX REPORT (EXCEL FORMAT) ---
+  // --- NEW: GENERATE WHATSAPP REPORT ---
+  const handleGenerateReport = () => {
+      // 1. Calculate Today's Totals for the Active Tab
+      const todayEntries = entries.filter(e => e.date === entryDate && e.area === activeTab);
+      const modelStats = {};
+      let totalActual = 0;
+      let totalPlan = 0;
+
+      // Actuals
+      todayEntries.forEach(e => {
+          e.items.forEach(i => {
+              if (!modelStats[i.model]) modelStats[i.model] = 0;
+              modelStats[i.model] += i.qty;
+              totalActual += i.qty;
+          });
+      });
+
+      // Plans (Get relevant models for this area)
+      const dataKey = getDataKeyForArea(activeTab);
+      const isWD = dataKey === 'WD_LINE';
+      const todaysPlanObj = dailyPlans[entryDate] || {};
+      
+      let allModels = [];
+      if(activeTab === 'CRF') {
+          // For CRF, iterate stats
+          allModels = Object.keys(modelStats);
+      } else {
+          const group = masterData[dataKey];
+          allModels = isWD ? (group["Standard"] || []) : Object.values(group).flat();
+      }
+
+      // Build Model Text lines
+      let modelLines = "";
+      allModels.forEach(m => {
+          const actual = modelStats[m] || 0;
+          const plan = todaysPlanObj[m] || 0;
+          if (activeModels[m] === false && actual === 0 && plan === 0) return; // Skip inactive
+          if (actual > 0 || plan > 0) {
+              modelLines += `${m} :- ${actual}${plan > 0 ? ` / ${plan}` : ''} nos.%0A`;
+              totalPlan += plan;
+          }
+      });
+
+      // 2. Format Date
+      const dateParts = entryDate.split('-'); // YYYY-MM-DD
+      const formattedDate = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
+
+      // 3. Build Message String
+      const message = `*${activeTab.toUpperCase()} PRODUCTION REPORT..*%0A%0A` +
+                      `*DATE :-* ${formattedDate}%0A` +
+                      `*Shift :-* ${reportParams.shift}%0A` +
+                      `*Man power :-* ${reportParams.manpower}%0A%0A` +
+                      `${modelLines}%0A` +
+                      `*Total :-  ${totalActual} ${totalPlan > 0 ? `/ ${totalPlan}` : ''} nos.*%0A%0A` +
+                      `Major Losses :-${reportParams.losses ? '%0A' + encodeURIComponent(reportParams.losses) : ' Nil'}`;
+
+      // 4. Open WhatsApp
+      window.open(`https://wa.me/?text=${message}`, '_blank');
+  };
+
   const generateMatrixReport = () => {
-      // 1. Get List of Dates in Range
       const start = new Date(exportRangeStart);
       const end = new Date(exportRangeEnd);
       const dates = [];
       for(let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
           dates.push(new Date(d).toISOString().split('T')[0]);
       }
-
-      // 2. Identify Models (Rows)
       const dataKey = getDataKeyForArea(exportArea);
       const isWD = dataKey === 'WD_LINE';
       let allModels = [];
-      
       if (exportArea === 'CRF') {
-          // Get unique models from entries for CRF
           allModels = [...new Set(entries.filter(e => e.area === 'CRF').flatMap(e => e.items.map(i => i.model)))];
       } else {
           const group = masterData[dataKey];
-          if(isWD) {
-             allModels = group["Standard"] || [];
-          } else {
-             allModels = Object.values(group).flat();
-          }
+          allModels = isWD ? (group["Standard"] || []) : Object.values(group).flat();
       }
       allModels.sort();
+      const grandTotal = { Category: 'Grand Total', 'Tot. Monthly Plan': 0, 'Tot.Act': 0, 'Bal.prod': 0, '% Ach': '' };
+      dates.forEach(date => { grandTotal[`${date} Plan`] = 0; grandTotal[`${date} Act`] = 0; });
 
-      // 3. Prepare Grand Total Object
-      const grandTotal = { 
-          Category: 'Grand Total', 
-          'Tot. Monthly Plan': 0, 
-          'Tot.Act': 0, 
-          'Bal.prod': 0, 
-          '% Ach': '' 
-      };
-      // Initialize Grand Total date columns
-      dates.forEach(date => {
-          grandTotal[`${date} Plan`] = 0;
-          grandTotal[`${date} Act`] = 0;
-      });
-
-      // 4. Build Data Rows
       const reportRows = allModels.map(model => {
           const row = { Category: model };
-
-          // A. Summary Columns
-          // Get Monthly Plan (Assuming exportRangeStart determines the month)
-          const currentMonth = exportRangeStart.slice(0, 7); // "2025-12"
+          const currentMonth = exportRangeStart.slice(0, 7);
           const monthlyBudget = (monthlyPlans[currentMonth] && monthlyPlans[currentMonth][model]) || 0;
-          
-          // Calculate Total Actuals for this specific range and model
-          const modelEntries = entries.filter(e => 
-              e.area === exportArea && 
-              (!exportSupervisor || e.supervisor === exportSupervisor) &&
-              e.date >= exportRangeStart && 
-              e.date <= exportRangeEnd
-          );
-          
-          const totalActual = modelEntries.reduce((sum, e) => {
-              const item = e.items.find(i => i.model === model);
-              return sum + (item ? item.qty : 0);
-          }, 0);
-
+          const modelEntries = entries.filter(e => e.area === exportArea && (!exportSupervisor || e.supervisor === exportSupervisor) && e.date >= exportRangeStart && e.date <= exportRangeEnd);
+          const totalActual = modelEntries.reduce((sum, e) => sum + (e.items.find(i => i.model === model)?.qty || 0), 0);
           const balance = monthlyBudget - totalActual;
           const percent = monthlyBudget > 0 ? Math.round((totalActual / monthlyBudget) * 100) : 0;
-
-          row['Tot. Monthly Plan'] = monthlyBudget;
-          row['Tot.Act'] = totalActual;
-          row['Bal.prod'] = balance;
-          row['% Ach'] = `${percent}%`;
-
-          // Update Grand Totals (Summary)
-          grandTotal['Tot. Monthly Plan'] += monthlyBudget;
-          grandTotal['Tot.Act'] += totalActual;
-          grandTotal['Bal.prod'] += balance;
-
-          // B. Date Columns (Plan vs Act)
+          row['Tot. Monthly Plan'] = monthlyBudget; row['Tot.Act'] = totalActual; row['Bal.prod'] = balance; row['% Ach'] = `${percent}%`;
+          grandTotal['Tot. Monthly Plan'] += monthlyBudget; grandTotal['Tot.Act'] += totalActual; grandTotal['Bal.prod'] += balance;
           dates.forEach(date => {
-              // Daily Plan
               const dayPlan = (dailyPlans[date] && dailyPlans[date][model]) || 0;
-              
-              // Daily Actual
-              const dayEntries = entries.filter(e => 
-                  e.date === date && 
-                  e.area === exportArea &&
-                  (!exportSupervisor || e.supervisor === exportSupervisor)
-              );
-              const dayActual = dayEntries.reduce((sum, e) => {
-                  const item = e.items.find(i => i.model === model);
-                  return sum + (item ? item.qty : 0);
-              }, 0);
-
-              // Set Row Data
-              row[`${date} Plan`] = dayPlan;
-              row[`${date} Act`] = dayActual;
-
-              // Update Grand Totals (Daily)
-              grandTotal[`${date} Plan`] += dayPlan;
-              grandTotal[`${date} Act`] += dayActual;
+              const dayActual = entries.filter(e => e.date === date && e.area === exportArea && (!exportSupervisor || e.supervisor === exportSupervisor)).reduce((sum, e) => sum + (e.items.find(i => i.model === model)?.qty || 0), 0);
+              row[`${date} Plan`] = dayPlan; row[`${date} Act`] = dayActual;
+              grandTotal[`${date} Plan`] += dayPlan; grandTotal[`${date} Act`] += dayActual;
           });
-
           return row;
       });
-
-      // 5. Finalize Grand Total Percentage
-      const gtPercent = grandTotal['Tot. Monthly Plan'] > 0 
-          ? Math.round((grandTotal['Tot.Act'] / grandTotal['Tot. Monthly Plan']) * 100) 
-          : 0;
+      const gtPercent = grandTotal['Tot. Monthly Plan'] > 0 ? Math.round((grandTotal['Tot.Act'] / grandTotal['Tot. Monthly Plan']) * 100) : 0;
       grandTotal['% Ach'] = `${gtPercent}%`;
-
-      // 6. Append Grand Total Row
       reportRows.push(grandTotal);
-
-      // 7. Export
       exportToCSV(reportRows, `Production_Report_${exportArea}_${exportRangeStart}`);
   };
 
@@ -776,7 +768,7 @@ export default function App() {
     const qtyThisHour = entriesThisHour.reduce((acc, e) => acc + e.items.reduce((s, i) => s + i.qty, 0), 0);
 
     return (
-      <div className="space-y-4 pb-24">
+      <div className="space-y-4 pb-24 relative">
         <div className="bg-white shadow-sm sticky top-[72px] z-40 overflow-x-auto no-scrollbar border-b border-gray-100">
           <div className="flex p-2 gap-2 min-w-max">{AREAS.map(area => (<button key={area} onClick={() => { setActiveTab(area); setSelectedCategory(''); setSelectedSubCategory(''); setSelectedModel(''); setSelectedMachine(''); }} className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all ${activeTab === area ? 'bg-blue-600 text-white shadow-md' : 'bg-gray-50 text-gray-600'}`}>{area}</button>))}</div>
         </div>
@@ -796,7 +788,6 @@ export default function App() {
                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Entry Date</label>
                       <input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} className="w-full p-2 border rounded text-sm mb-2" />
                       
-                      {/* UPDATED: Supervisor Dropdown */}
                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Supervisor Name</label>
                       <div className="relative">
                           <select value={supervisorName} onChange={(e) => setSupervisorName(e.target.value)} className="w-full p-2 border rounded text-sm bg-white appearance-none">
@@ -828,7 +819,17 @@ export default function App() {
           </Card>
 
           {currentBatch.length > 0 && (<div className="space-y-2 animate-in fade-in slide-in-from-bottom-4"><h3 className="text-sm font-semibold text-gray-500 ml-1">Entries to {editingId ? 'Update' : 'Submit'}</h3>{currentBatch.map((item) => (<div key={item.id} className="bg-white p-3 rounded-lg border border-gray-200 flex justify-between items-center shadow-sm"><div>{isCRF ? (<><div className="font-bold text-gray-800">{item.part}</div><div className="text-xs text-gray-500">{item.machine} | {item.category} - {item.model}</div></>) : (<><div className="font-bold text-gray-800">{item.model}</div>{!isWD && <div className="text-xs text-gray-500">{item.category}</div>}</>)}</div><div className="flex items-center gap-4"><span className="text-lg font-bold text-blue-600">{item.qty}</span><button onClick={() => removeBatchItem(item.id)} className="text-red-400 hover:text-red-600 p-1"><Trash2 size={18} /></button></div></div>))}</div>)}
-          <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-100 shadow-lg z-50"><div className="max-w-md mx-auto"><button onClick={handleSubmitProduction} disabled={!supervisorName || currentBatch.length === 0} className={`w-full py-3.5 rounded-xl font-bold text-lg flex items-center justify-center gap-2 shadow-lg text-white disabled:bg-gray-200 disabled:text-gray-400 ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>{(!supervisorName || currentBatch.length === 0) ? <><AlertCircle size={20} /> Complete Details</> : (editingId ? <><RefreshCw size={20} /> Update Entry</> : <><Save size={20} /> Submit Production</>)}</button></div></div>
+          
+          <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 shadow-lg z-50">
+             <div className="max-w-md mx-auto p-4 flex gap-2">
+                 <button onClick={() => setShowReportModal(true)} className="flex-1 py-3.5 rounded-xl font-bold text-gray-700 bg-green-50 border border-green-200 hover:bg-green-100 flex items-center justify-center gap-2">
+                     <MessageCircle size={20} className="text-green-600"/> End Shift Report
+                 </button>
+                 <button onClick={handleSubmitProduction} disabled={!supervisorName || currentBatch.length === 0} className={`flex-[2] py-3.5 rounded-xl font-bold text-lg flex items-center justify-center gap-2 shadow-lg text-white disabled:bg-gray-200 disabled:text-gray-400 ${editingId ? 'bg-orange-500 hover:bg-orange-600' : 'bg-blue-600 hover:bg-blue-700'}`}>
+                     {(!supervisorName || currentBatch.length === 0) ? <><AlertCircle size={20} /> Complete</> : (editingId ? <><RefreshCw size={20} /> Update</> : <><Save size={20} /> Submit</>)}
+                 </button>
+             </div>
+          </div>
          
           {recentEntries.length > 0 && (
               <div className="mt-8 pt-4 border-t border-gray-200">
@@ -849,6 +850,41 @@ export default function App() {
               </div>
           )}
         </div>
+        
+        {/* NEW: END SHIFT REPORT MODAL */}
+        {showReportModal && (
+            <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
+                <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                    <div className="bg-green-600 p-4 flex justify-between items-center text-white">
+                        <h3 className="font-bold text-lg flex items-center gap-2"><MessageCircle size={20}/> End Shift Report</h3>
+                        <button onClick={() => setShowReportModal(false)}><X size={20}/></button>
+                    </div>
+                    <div className="p-4 space-y-4">
+                        <div>
+                            <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Shift Type</label>
+                            <select value={reportParams.shift} onChange={e => setReportParams({...reportParams, shift: e.target.value})} className="w-full p-2 border rounded bg-white">
+                                <option>General Shift</option>
+                                <option>Shift A</option>
+                                <option>Shift B</option>
+                                <option>Shift C</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Manpower Count</label>
+                            <input type="number" placeholder="e.g. 12" value={reportParams.manpower} onChange={e => setReportParams({...reportParams, manpower: e.target.value})} className="w-full p-2 border rounded" />
+                        </div>
+                        <div>
+                            <label className="text-xs font-bold text-gray-500 uppercase block mb-1">Major Losses / Remarks</label>
+                            <textarea placeholder="- Machine breakdown (14:00-14:30)..." rows={4} value={reportParams.losses} onChange={e => setReportParams({...reportParams, losses: e.target.value})} className="w-full p-2 border rounded text-sm"></textarea>
+                        </div>
+                        <button onClick={handleGenerateReport} className="w-full bg-green-600 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2 hover:bg-green-700">
+                            <Share2 size={18}/> Share on WhatsApp
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+
       </div>
     );
   };
