@@ -26,10 +26,10 @@ import {
   Wifi,
   WifiOff,
   History,
-  Clock,         // NEW
-  Bell,          // NEW
-  MessageCircle, // NEW
-  Smartphone     // NEW
+  Clock,
+  MessageCircle,
+  FileSpreadsheet, // NEW ICON
+  Filter           // NEW ICON
 } from 'lucide-react';
 
 // --- Firebase Imports ---
@@ -78,7 +78,7 @@ const PROCESS_FLOW = {
   independent: ["CRF", "Door foaming", "WD final"]
 };
 
-// --- INITIAL DATA (New Hierarchy) ---
+// --- INITIAL DATA ---
 const INITIAL_MASTER_DATA = {
   CRF_MACHINES: {
     "Komatsu Press": ["Side Panel", "Back Panel", "Bottom Plate"],
@@ -95,7 +95,6 @@ const INITIAL_MASTER_DATA = {
   }
 };
 
-// NEW: Initial Shift Configuration
 const INITIAL_SHIFT_CONFIG = {
     shifts: [
         { id: 1, name: "Shift A", start: "08:00", end: "16:00" },
@@ -141,13 +140,12 @@ export default function App() {
   const [activeModels, setActiveModels] = useState({});
   const [monthlyPlans, setMonthlyPlans] = useState({});
   const [dailyPlans, setDailyPlans] = useState({});
-  
-  // NEW: Shift Configuration State
   const [shiftConfig, setShiftConfig] = useState(INITIAL_SHIFT_CONFIG);
   const [lastNotifiedHour, setLastNotifiedHour] = useState(null);
  
   // Security State
   const [isPlanUnlocked, setIsPlanUnlocked] = useState(false);
+  const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(false); // NEW
   const [passwordInput, setPasswordInput] = useState('');
 
   // Entry Form State
@@ -172,8 +170,6 @@ export default function App() {
   const [newItemName, setNewItemName] = useState('');
   const [newCategoryInput, setNewCategoryInput] = useState('');
   const [targetCategoryForModel, setTargetCategoryForModel] = useState('');
-  
-  // Settings: New Shift Inputs
   const [newSupervisorName, setNewSupervisorName] = useState('');
   const [newSupervisorPhone, setNewSupervisorPhone] = useState('');
   const [selectedShiftId, setSelectedShiftId] = useState(1);
@@ -181,7 +177,6 @@ export default function App() {
   // Report State
   const [reportDate, setReportDate] = useState(new Date().toISOString().split('T')[0]);
   const [reportMonth, setReportMonth] = useState(new Date().toISOString().slice(0, 7)); 
-  
   const [reportArea, setReportArea] = useState(AREAS[0]);
   const [reportType, setReportType] = useState('daily');
   const [reportModel, setReportModel] = useState('');
@@ -191,6 +186,12 @@ export default function App() {
   const [planReportMode, setPlanReportMode] = useState('monthly');
   const [rangeStart, setRangeStart] = useState(new Date().toISOString().split('T')[0]);
   const [rangeEnd, setRangeEnd] = useState(new Date().toISOString().split('T')[0]);
+
+  // NEW: Advanced Export Filters State
+  const [exportRangeStart, setExportRangeStart] = useState(new Date().toISOString().split('T')[0]);
+  const [exportRangeEnd, setExportRangeEnd] = useState(new Date().toISOString().split('T')[0]);
+  const [exportSupervisor, setExportSupervisor] = useState('');
+  const [exportArea, setExportArea] = useState(AREAS[0]);
 
   // Plan Edit Screen State
   const [planMode, setPlanMode] = useState('daily');
@@ -219,12 +220,9 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
-
-    // Request Notification Permission on load
     if ("Notification" in window && Notification.permission !== "granted") {
         Notification.requestPermission();
     }
-
     const entriesRef = collection(db, 'artifacts', appId, 'public', 'data', 'production_entries');
     const unsubEntries = onSnapshot(entriesRef, (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -248,7 +246,6 @@ export default function App() {
             if (doc.id === 'activeModels') setActiveModels(d.data || {});
             if (doc.id === 'monthlyPlans') setMonthlyPlans(d.data || {});
             if (doc.id === 'dailyPlans') setDailyPlans(d.data || {});
-            // Load Shift Config
             if (doc.id === 'shiftConfig') setShiftConfig(d.data || INITIAL_SHIFT_CONFIG);
         });
     }, (err) => console.error("Settings Sync Error", err));
@@ -259,31 +256,24 @@ export default function App() {
     };
   }, [user]);
 
-  // --- NEW: Hourly Notification Logic ---
   useEffect(() => {
       const checkHourlyReminder = () => {
           const now = new Date();
           const currentHour = now.getHours();
           const currentMinute = now.getMinutes();
-
-          // Trigger reminder at minute 0 (top of the hour)
           if (currentMinute === 0 && lastNotifiedHour !== currentHour) {
               setLastNotifiedHour(currentHour);
-              
-              // 1. Browser Notification (Local)
               if ("Notification" in window && Notification.permission === "granted") {
                   new Notification("Voltas Production Reminder", {
                       body: "It's time to update the hourly production data!",
                       icon: "/vite.svg" 
                   });
               } else {
-                  // Fallback if no permission
                   showNotification("🔔 Reminder: Update Hourly Report!");
               }
           }
       };
-
-      const interval = setInterval(checkHourlyReminder, 15000); // Check every 15 sec
+      const interval = setInterval(checkHourlyReminder, 15000); 
       return () => clearInterval(interval);
   }, [lastNotifiedHour]);
 
@@ -294,13 +284,14 @@ export default function App() {
     setTimeout(() => setNotification(null), 4000);
   };
 
-  const handleUnlockPlan = () => {
+  const handleUnlock = (type) => {
     if (passwordInput === '1234') {
-      setIsPlanUnlocked(true);
+      if (type === 'plan') setIsPlanUnlocked(true);
+      if (type === 'settings') setIsSettingsUnlocked(true);
       setPasswordInput('');
-      showNotification("Plan Editing Unlocked");
+      showNotification("Unlocked Successfully");
     } else {
-      showNotification("Incorrect Password");
+      showNotification("Incorrect PIN");
     }
   };
 
@@ -316,10 +307,11 @@ export default function App() {
       await updateSettingsDoc('activeModels', newStatus);
   };
 
-  // --- NEW: Shift Settings Handlers ---
   const handleAddSupervisor = async () => {
-      if(!newSupervisorName || !newSupervisorPhone) return;
+      if(!newSupervisorName) return;
       const newConfig = { ...shiftConfig };
+      // Ensure supervisors array exists
+      if (!newConfig.supervisors) newConfig.supervisors = [];
       newConfig.supervisors = [...newConfig.supervisors, {
           name: newSupervisorName,
           phone: newSupervisorPhone,
@@ -332,10 +324,10 @@ export default function App() {
       showNotification("Supervisor Added");
   };
 
-  const handleDeleteSupervisor = async (phone) => {
+  const handleDeleteSupervisor = async (name) => {
       if(!confirm("Remove Supervisor?")) return;
       const newConfig = { ...shiftConfig };
-      newConfig.supervisors = newConfig.supervisors.filter(s => s.phone !== phone);
+      newConfig.supervisors = newConfig.supervisors.filter(s => s.name !== name);
       setShiftConfig(newConfig);
       await updateSettingsDoc('shiftConfig', newConfig);
   };
@@ -345,8 +337,6 @@ export default function App() {
       const url = `https://wa.me/${phone}?text=${encodeURIComponent(text)}`;
       window.open(url, '_blank');
   };
-
-  // --- Settings Logic ---
 
   const handleSettingsAddCategory = async () => {
     if (!newCategoryInput) return;
@@ -512,6 +502,72 @@ export default function App() {
     const link = document.createElement('a'); const url = URL.createObjectURL(blob); link.setAttribute('href', url); link.setAttribute('download', `${filename}.csv`); document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
+  // --- NEW: Advanced Matrix Report Generator ---
+  const generateMatrixReport = () => {
+      // 1. Get List of Dates in Range
+      const start = new Date(exportRangeStart);
+      const end = new Date(exportRangeEnd);
+      const dates = [];
+      for(let d = start; d <= end; d.setDate(d.getDate() + 1)) dates.push(new Date(d).toISOString().split('T')[0]);
+
+      // 2. Identify Models (Columns)
+      const isWD = getDataKeyForArea(exportArea) === 'WD_LINE';
+      const dataKey = getDataKeyForArea(exportArea);
+      let allModels = [];
+      
+      if (exportArea === 'CRF') {
+          // For CRF we use Parts as columns usually, or Part-Model combos. Sticking to Model request.
+          // Getting unique models from entry data if master data is complex
+          allModels = [...new Set(entries.filter(e => e.area === 'CRF').flatMap(e => e.items.map(i => i.model)))];
+      } else {
+          const group = masterData[dataKey];
+          if(isWD) {
+             allModels = group["Standard"] || [];
+          } else {
+             allModels = Object.values(group).flat();
+          }
+      }
+      allModels.sort();
+
+      // 3. Build Rows (Date | Type | Model A | Model B ...)
+      const reportRows = [];
+      
+      dates.forEach(date => {
+          // Filter entries for this date, area, and optional supervisor
+          const dayEntries = entries.filter(e => 
+              e.date === date && 
+              e.area === exportArea && 
+              (!exportSupervisor || e.supervisor === exportSupervisor)
+          );
+
+          // Calculate Actuals per model for this day
+          const actualsMap = {};
+          dayEntries.forEach(entry => {
+              entry.items.forEach(item => {
+                  if(!actualsMap[item.model]) actualsMap[item.model] = 0;
+                  actualsMap[item.model] += item.qty;
+              });
+          });
+
+          // Get Plan per model for this day (Daily Plan > Monthly/30)
+          const dayPlan = dailyPlans[date] || {};
+          // Note: If no daily plan, we check monthly and divide by 30 roughly, or show 0. 
+          // Sticking to explicit daily plan or 0 for matrix clarity.
+          
+          // Row 1: PLAN
+          const planRow = { Date: date, Type: 'PLAN' };
+          allModels.forEach(m => planRow[m] = dayPlan[m] || 0);
+          reportRows.push(planRow);
+
+          // Row 2: ACTUAL
+          const actualRow = { Date: date, Type: 'ACTUAL' };
+          allModels.forEach(m => actualRow[m] = actualsMap[m] || 0);
+          reportRows.push(actualRow);
+      });
+
+      exportToCSV(reportRows, `Matrix_Report_${exportArea}_${exportRangeStart}_to_${exportRangeEnd}`);
+  };
+
   // --- Reports Data ---
   
   const productionReportData = useMemo(() => {
@@ -605,7 +661,6 @@ export default function App() {
     }
   }, [planReportMode, reportMonth, rangeStart, rangeEnd, monthlyPlans, dailyPlans, masterData]);
 
-  // --- NEW: Hourly Report Logic ---
   const hourlyReportData = useMemo(() => {
     const filtered = entries.filter(e => e.date === reportDate && e.area === reportArea);
     const hoursMap = {}; 
@@ -646,7 +701,10 @@ export default function App() {
           {dbStatus === 'connected' ? <Wifi size={16} className="text-green-300"/> : <WifiOff size={16} className="text-red-300"/>}
           {['entry', 'report', 'plan', 'settings'].map(m => (
             <button key={m} onClick={() => setView(m)} className={`p-2 rounded-full transition-all ${view === m ? 'bg-white text-blue-700' : 'bg-blue-600 text-blue-100'}`}>
-              {m === 'entry' && <PenTool size={18} />}{m === 'report' && <BarChart3 size={18} />}{m === 'plan' && (isPlanUnlocked ? <Unlock size={18} /> : <Lock size={18} />)}{m === 'settings' && <Settings size={18} />}
+              {m === 'entry' && <PenTool size={18} />}
+              {m === 'report' && <BarChart3 size={18} />}
+              {m === 'plan' && (isPlanUnlocked ? <Unlock size={18} /> : <Lock size={18} />)}
+              {m === 'settings' && (isSettingsUnlocked ? <Settings size={18} /> : <Lock size={18} />)}
             </button>
           ))}
         </div>
@@ -661,7 +719,6 @@ export default function App() {
     const filterActive = (list) => list.filter(item => activeModels[item] !== false);
     const recentEntries = entries.filter(e => e.date === entryDate && e.area === activeTab);
 
-    // NEW: Calculate Current Hour Status
     const currentHour = new Date().getHours();
     const currentHourLabel = `${currentHour.toString().padStart(2, '0')}:00 - ${(currentHour + 1).toString().padStart(2, '0')}:00`;
     const entriesThisHour = recentEntries.filter(e => new Date(e.timestamp).getHours() === currentHour);
@@ -674,7 +731,6 @@ export default function App() {
         </div>
         <div className="px-4 space-y-4 max-w-md mx-auto mt-4">
           
-          {/* NEW: HOURLY STATUS WIDGET */}
           <div className="bg-gradient-to-r from-blue-600 to-blue-500 rounded-xl p-4 text-white shadow-lg flex items-center justify-between">
               <div>
                   <div className="text-xs font-bold text-blue-100 uppercase mb-1 flex items-center gap-1"><Clock size={12}/> Current Hour ({currentHourLabel})</div>
@@ -688,8 +744,18 @@ export default function App() {
                   <div className="flex-1">
                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Entry Date</label>
                       <input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} className="w-full p-2 border rounded text-sm mb-2" />
+                      
+                      {/* UPDATED: Supervisor Dropdown */}
                       <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Supervisor Name</label>
-                      <div className="flex items-center gap-2"><User size={18} className="text-gray-400" /><input type="text" value={supervisorName} onChange={(e) => setSupervisorName(e.target.value)} placeholder="Enter your name" className="w-full outline-none text-gray-800 font-medium placeholder-gray-300" /></div>
+                      <div className="relative">
+                          <select value={supervisorName} onChange={(e) => setSupervisorName(e.target.value)} className="w-full p-2 border rounded text-sm bg-white appearance-none">
+                              <option value="">Select Supervisor...</option>
+                              {shiftConfig.supervisors && shiftConfig.supervisors.map((s, idx) => (
+                                  <option key={idx} value={s.name}>{s.name}</option>
+                              ))}
+                          </select>
+                          <ChevronDown className="absolute right-3 top-2.5 text-gray-400 pointer-events-none" size={16} />
+                      </div>
                   </div>
               </div>
           </Card>
@@ -743,9 +809,9 @@ export default function App() {
       
       {/* Navigation Tabs */}
       <div className="flex bg-gray-200 p-1 rounded-lg overflow-x-auto no-scrollbar">
-          {['flow', 'daily', 'hourly', 'plan'].map(t => (
+          {['flow', 'daily', 'hourly', 'export'].map(t => (
              <button key={t} onClick={() => setReportType(t)} className={`flex-1 py-2 px-3 text-xs font-bold rounded-md transition-all whitespace-nowrap capitalize ${reportType === t ? 'bg-white shadow text-blue-800' : 'text-gray-600'}`}>
-                {t === 'flow' ? 'Process Flow' : t === 'daily' ? 'Production' : t === 'hourly' ? 'Hourly' : 'Plan Status'}
+                {t === 'flow' ? 'Process Flow' : t === 'daily' ? 'Production' : t === 'hourly' ? 'Hourly' : 'Adv. Export'}
              </button>
           ))}
       </div>
@@ -784,7 +850,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 3. NEW HOURLY REPORT VIEW */}
+      {/* 3. HOURLY REPORT VIEW */}
       {reportType === 'hourly' && (
         <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
            <Card className="p-4 bg-white border border-gray-200">
@@ -827,32 +893,69 @@ export default function App() {
            </div>
         </div>
       )}
-     
-      {/* 4. PLAN REPORT VIEW */}
-      {reportType === 'plan' && (
-         <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
-           <div className="flex gap-2"><button onClick={() => setPlanReportMode('monthly')} className={`flex-1 py-1.5 text-xs font-bold rounded border ${planReportMode === 'monthly' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}>Monthly Budget</button><button onClick={() => setPlanReportMode('range')} className={`flex-1 py-1.5 text-xs font-bold rounded border ${planReportMode === 'range' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-500 border-gray-200'}`}>Date Range</button></div>
-           <Card className="p-4 bg-white border border-gray-200">
-             <div className="flex justify-between items-center mb-2 border-b border-gray-100 pb-2"><span className="text-xs font-bold text-gray-400 uppercase">View & Export</span><button onClick={() => { const filename = planReportMode === 'monthly' ? `Budget_${reportMonth}` : `Plan_${rangeStart}_to_${rangeEnd}`; if (planReportMode === 'monthly') { exportToCSV(planReportData.modelAggregates.map(r => ({ Model: r.model, Monthly_Budget: r.qty })), filename); } else { exportToCSV(planReportData.dailyBreakdown.map(d => ({ Date: d.date, Total_Plan_Qty: d.total })), filename + "_Breakdown"); } }} className="text-blue-600 bg-blue-50 p-1.5 rounded-lg flex items-center gap-1 text-xs font-bold"><Download size={14}/> Export</button></div>
-             {planReportMode === 'monthly' ? (<div className="flex justify-between items-end"><div className="flex-1 mr-4"><label className="text-xs font-bold text-gray-500 mb-1 block">Select Month</label><input type="month" value={reportMonth} onChange={(e) => setReportMonth(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div><button onClick={() => handleEditPlanFromReport('monthly', reportMonth)} className="bg-blue-600 text-white p-2 rounded-lg mb-0.5"><Pencil size={18} /></button></div>) : (<div className="grid grid-cols-2 gap-3"><div><label className="text-xs font-bold text-gray-500 mb-1 block">Start Date</label><input type="date" value={rangeStart} onChange={(e) => setRangeStart(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div><div><label className="text-xs font-bold text-gray-500 mb-1 block">End Date</label><input type="date" value={rangeEnd} onChange={(e) => setRangeEnd(e.target.value)} className="w-full p-2 rounded border border-gray-200 text-sm" /></div></div>)}
-           </Card>
-           {planReportMode === 'monthly' ? (<div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200"><div className="bg-gray-50 p-3 border-b border-gray-100 font-bold text-gray-700 text-sm">Budget Breakdown ({reportMonth})</div>{planReportData.modelAggregates.length > 0 ? (<table className="w-full text-left"><tbody className="divide-y divide-gray-100">{planReportData.modelAggregates.map((row) => (<tr key={row.model} className="text-sm"><td className="p-3 font-medium text-gray-700">{row.model}</td><td className="p-3 text-right font-bold text-gray-900">{row.qty}</td></tr>))}</tbody></table>) : (<div className="p-4 text-center text-sm text-gray-400">No budget set for this month.</div>)}</div>) : (<div className="space-y-4"><div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200"><div className="bg-purple-50 p-3 border-b border-purple-100 font-bold text-purple-800 text-sm">Total Plan ({rangeStart} to {rangeEnd})</div>{planReportData.modelAggregates.length > 0 ? (<table className="w-full text-left"><tbody className="divide-y divide-gray-100">{planReportData.modelAggregates.map((row) => (<tr key={row.model} className="text-sm"><td className="p-3 font-medium text-gray-700">{row.model}</td><td className="p-3 text-right font-bold text-gray-900">{row.qty}</td></tr>))}</tbody></table>) : (<div className="p-4 text-center text-sm text-gray-400">No plans found in range.</div>)}</div><div className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-200"><div className="bg-gray-50 p-3 border-b border-gray-100 font-bold text-gray-700 text-sm">Daily Schedule Breakdown</div><div className="divide-y divide-gray-100">{planReportData.dailyBreakdown.map(day => (<div key={day.date} className="flex items-center justify-between p-3 hover:bg-gray-50"><div><div className="font-medium text-gray-800 text-sm">{day.date}</div></div><div className="flex items-center gap-4"><span className="text-sm font-bold text-gray-600">{day.total} units</span><button onClick={() => handleEditPlanFromReport('daily', day.date)} className="text-blue-600 p-1 bg-blue-50 rounded"><Pencil size={14}/></button></div></div>))}</div></div></div>)}
-        </div>
+
+      {/* 4. NEW: ADVANCED EXPORT VIEW */}
+      {reportType === 'export' && (
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+              <Card className="p-4 bg-white border border-gray-200">
+                  <h3 className="text-sm font-bold text-gray-700 mb-4 flex items-center gap-2"><Filter size={18} /> Advanced Filters</h3>
+                  
+                  <div className="space-y-3">
+                      <div className="grid grid-cols-2 gap-3">
+                          <div>
+                              <label className="text-xs font-bold text-gray-500 mb-1 block">From</label>
+                              <input type="date" value={exportRangeStart} onChange={(e) => setExportRangeStart(e.target.value)} className="w-full p-2 border rounded text-sm" />
+                          </div>
+                          <div>
+                              <label className="text-xs font-bold text-gray-500 mb-1 block">To</label>
+                              <input type="date" value={exportRangeEnd} onChange={(e) => setExportRangeEnd(e.target.value)} className="w-full p-2 border rounded text-sm" />
+                          </div>
+                      </div>
+
+                      <div>
+                          <label className="text-xs font-bold text-gray-500 mb-1 block">Work Area</label>
+                          <select value={exportArea} onChange={(e) => setExportArea(e.target.value)} className="w-full p-2 border rounded text-sm bg-white">
+                              {AREAS.map(area => <option key={area} value={area}>{area}</option>)}
+                          </select>
+                      </div>
+
+                      <div>
+                          <label className="text-xs font-bold text-gray-500 mb-1 block">Supervisor (Optional)</label>
+                          <select value={exportSupervisor} onChange={(e) => setExportSupervisor(e.target.value)} className="w-full p-2 border rounded text-sm bg-white">
+                              <option value="">All Supervisors</option>
+                              {shiftConfig.supervisors && shiftConfig.supervisors.map((s, idx) => (
+                                  <option key={idx} value={s.name}>{s.name}</option>
+                              ))}
+                          </select>
+                      </div>
+
+                      <button 
+                          onClick={generateMatrixReport}
+                          className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2 mt-4 hover:bg-blue-700 shadow-md">
+                          <FileSpreadsheet size={20} /> Download Matrix Report
+                      </button>
+                      <p className="text-center text-xs text-gray-400 mt-2">
+                          Format: Date Rows x Model Columns <br/>(Plan vs Actual)
+                      </p>
+                  </div>
+              </Card>
+          </div>
       )}
     </div>
     );
   };
 
+  const renderLockScreen = (type) => (
+      <div className="p-8 max-w-md mx-auto flex flex-col items-center justify-center min-h-[60vh] space-y-6">
+        <div className="bg-blue-100 p-6 rounded-full"><Lock size={48} className="text-blue-600" /></div>
+        <div className="text-center"><h2 className="text-xl font-bold text-gray-800">{type === 'plan' ? 'Plan Locked' : 'Settings Locked'}</h2><p className="text-sm text-gray-500 mt-1">Enter PIN to access</p></div>
+        <div className="w-full max-w-xs space-y-4"><input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} placeholder="Enter PIN" className="w-full text-center text-2xl tracking-widest p-3 border rounded-lg focus:border-blue-500 outline-none" maxLength={4} /><button onClick={() => handleUnlock(type)} className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold hover:bg-blue-700">Unlock</button><p className="text-center text-xs text-gray-400">Default PIN: 1234</p></div>
+      </div>
+  );
+
   const renderPlanScreen = () => {
-    if (!isPlanUnlocked) {
-      return (
-        <div className="p-8 max-w-md mx-auto flex flex-col items-center justify-center min-h-[60vh] space-y-6">
-          <div className="bg-blue-100 p-6 rounded-full"><Lock size={48} className="text-blue-600" /></div>
-          <div className="text-center"><h2 className="text-xl font-bold text-gray-800">Plan Locked</h2><p className="text-sm text-gray-500 mt-1">Enter PIN to edit targets</p></div>
-          <div className="w-full max-w-xs space-y-4"><input type="password" value={passwordInput} onChange={(e) => setPasswordInput(e.target.value)} placeholder="Enter PIN" className="w-full text-center text-2xl tracking-widest p-3 border rounded-lg focus:border-blue-500 outline-none" maxLength={4} /><button onClick={handleUnlockPlan} className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold hover:bg-blue-700">Unlock</button><p className="text-center text-xs text-gray-400">Default PIN: 1234</p></div>
-        </div>
-      );
-    }
+    if (!isPlanUnlocked) return renderLockScreen('plan');
+
     return (
       <div className="p-4 max-w-md mx-auto space-y-6 pb-24">
         <div className="flex items-center justify-between mb-2"><h2 className="text-lg font-bold text-gray-700">Set Targets</h2><button onClick={() => setIsPlanUnlocked(false)} className="text-xs text-red-500 font-bold flex items-center gap-1 border border-red-100 px-2 py-1 rounded bg-red-50"><Lock size={12}/> Lock</button></div>
@@ -882,6 +985,9 @@ export default function App() {
   };
 
   const renderSettingsScreen = () => {
+    // NEW: Check lock status
+    if (!isSettingsUnlocked) return renderLockScreen('settings');
+
     const getSafeGroupData = (groupKey) => {
         const data = masterData[groupKey];
         if (!data || Array.isArray(data)) return {};
@@ -891,23 +997,26 @@ export default function App() {
 
     return (
      <div className="p-4 max-w-md mx-auto space-y-6 pb-20">
-      <div className="bg-white p-4 rounded-xl border-l-4 border-blue-600 shadow-sm"><h2 className="font-bold text-gray-800 flex items-center gap-2"><Settings size={20} className="text-blue-600" /> Plant Configuration</h2></div>
+      <div className="flex items-center justify-between">
+          <div className="bg-white p-4 rounded-xl border-l-4 border-blue-600 shadow-sm w-full mr-2"><h2 className="font-bold text-gray-800 flex items-center gap-2"><Settings size={20} className="text-blue-600" /> Plant Configuration</h2></div>
+          <button onClick={() => setIsSettingsUnlocked(false)} className="bg-red-50 text-red-500 p-3 rounded-xl border border-red-100"><Lock size={20}/></button>
+      </div>
      
-      {/* NEW: Shift Configuration Section */}
+      {/* Shift Configuration Section */}
       <Card className="p-4 bg-purple-50 border-purple-100">
-          <h3 className="font-bold text-purple-800 text-sm mb-3 flex items-center gap-2"><User size={16}/> Supervisor Notifications</h3>
+          <h3 className="font-bold text-purple-800 text-sm mb-3 flex items-center gap-2"><User size={16}/> Supervisor Management</h3>
           
           {/* Add Supervisor Form */}
           <div className="mb-4 space-y-2">
               <input type="text" placeholder="Supervisor Name" value={newSupervisorName} onChange={e => setNewSupervisorName(e.target.value)} className="w-full p-2 text-sm border rounded" />
               <div className="flex gap-2">
-                  <input type="tel" placeholder="Mobile Number (with Country Code)" value={newSupervisorPhone} onChange={e => setNewSupervisorPhone(e.target.value)} className="flex-1 p-2 text-sm border rounded" />
+                  <input type="tel" placeholder="Mobile Number" value={newSupervisorPhone} onChange={e => setNewSupervisorPhone(e.target.value)} className="flex-1 p-2 text-sm border rounded" />
                   <button onClick={handleAddSupervisor} className="bg-purple-600 text-white px-3 rounded"><Plus size={18}/></button>
               </div>
           </div>
 
           <div className="divide-y divide-purple-200/50">
-              {shiftConfig.supervisors.map((sup, idx) => (
+              {shiftConfig.supervisors && shiftConfig.supervisors.map((sup, idx) => (
                   <div key={idx} className="flex justify-between items-center py-2">
                       <div>
                           <div className="font-bold text-sm text-gray-800">{sup.name}</div>
@@ -915,13 +1024,10 @@ export default function App() {
                       </div>
                       <div className="flex gap-2">
                           <button onClick={() => handleWhatsAppReminder(sup.phone, sup.name)} className="bg-green-500 text-white p-1.5 rounded-full" title="Send WhatsApp Reminder"><MessageCircle size={14}/></button>
-                          <button onClick={() => handleDeleteSupervisor(sup.phone)} className="text-red-400 p-1.5"><Trash2 size={14}/></button>
+                          <button onClick={() => handleDeleteSupervisor(sup.name)} className="text-red-400 p-1.5"><Trash2 size={14}/></button>
                       </div>
                   </div>
               ))}
-          </div>
-          <div className="mt-2 text-[10px] text-purple-600 italic">
-              * Hourly reminders will appear as browser notifications automatically. Use the WhatsApp button for manual follow-up.
           </div>
       </Card>
 
