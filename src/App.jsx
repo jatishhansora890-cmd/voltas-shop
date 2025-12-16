@@ -28,8 +28,8 @@ import {
   History,
   Clock,
   MessageCircle,
-  FileSpreadsheet, // NEW ICON
-  Filter           // NEW ICON
+  FileSpreadsheet,
+  Filter
 } from 'lucide-react';
 
 // --- Firebase Imports ---
@@ -145,7 +145,7 @@ export default function App() {
  
   // Security State
   const [isPlanUnlocked, setIsPlanUnlocked] = useState(false);
-  const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(false); // NEW
+  const [isSettingsUnlocked, setIsSettingsUnlocked] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
 
   // Entry Form State
@@ -310,7 +310,6 @@ export default function App() {
   const handleAddSupervisor = async () => {
       if(!newSupervisorName) return;
       const newConfig = { ...shiftConfig };
-      // Ensure supervisors array exists
       if (!newConfig.supervisors) newConfig.supervisors = [];
       newConfig.supervisors = [...newConfig.supervisors, {
           name: newSupervisorName,
@@ -502,22 +501,23 @@ export default function App() {
     const link = document.createElement('a'); const url = URL.createObjectURL(blob); link.setAttribute('href', url); link.setAttribute('download', `${filename}.csv`); document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
-  // --- NEW: Advanced Matrix Report Generator ---
+  // --- GENERATE MATRIX REPORT (EXCEL FORMAT) ---
   const generateMatrixReport = () => {
       // 1. Get List of Dates in Range
       const start = new Date(exportRangeStart);
       const end = new Date(exportRangeEnd);
       const dates = [];
-      for(let d = start; d <= end; d.setDate(d.getDate() + 1)) dates.push(new Date(d).toISOString().split('T')[0]);
+      for(let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+          dates.push(new Date(d).toISOString().split('T')[0]);
+      }
 
-      // 2. Identify Models (Columns)
-      const isWD = getDataKeyForArea(exportArea) === 'WD_LINE';
+      // 2. Identify Models (Rows)
       const dataKey = getDataKeyForArea(exportArea);
+      const isWD = dataKey === 'WD_LINE';
       let allModels = [];
       
       if (exportArea === 'CRF') {
-          // For CRF we use Parts as columns usually, or Part-Model combos. Sticking to Model request.
-          // Getting unique models from entry data if master data is complex
+          // Get unique models from entries for CRF
           allModels = [...new Set(entries.filter(e => e.area === 'CRF').flatMap(e => e.items.map(i => i.model)))];
       } else {
           const group = masterData[dataKey];
@@ -529,43 +529,94 @@ export default function App() {
       }
       allModels.sort();
 
-      // 3. Build Rows (Date | Type | Model A | Model B ...)
-      const reportRows = [];
-      
+      // 3. Prepare Grand Total Object
+      const grandTotal = { 
+          Category: 'Grand Total', 
+          'Tot. Monthly Plan': 0, 
+          'Tot.Act': 0, 
+          'Bal.prod': 0, 
+          '% Ach': '' 
+      };
+      // Initialize Grand Total date columns
       dates.forEach(date => {
-          // Filter entries for this date, area, and optional supervisor
-          const dayEntries = entries.filter(e => 
-              e.date === date && 
-              e.area === exportArea && 
-              (!exportSupervisor || e.supervisor === exportSupervisor)
-          );
-
-          // Calculate Actuals per model for this day
-          const actualsMap = {};
-          dayEntries.forEach(entry => {
-              entry.items.forEach(item => {
-                  if(!actualsMap[item.model]) actualsMap[item.model] = 0;
-                  actualsMap[item.model] += item.qty;
-              });
-          });
-
-          // Get Plan per model for this day (Daily Plan > Monthly/30)
-          const dayPlan = dailyPlans[date] || {};
-          // Note: If no daily plan, we check monthly and divide by 30 roughly, or show 0. 
-          // Sticking to explicit daily plan or 0 for matrix clarity.
-          
-          // Row 1: PLAN
-          const planRow = { Date: date, Type: 'PLAN' };
-          allModels.forEach(m => planRow[m] = dayPlan[m] || 0);
-          reportRows.push(planRow);
-
-          // Row 2: ACTUAL
-          const actualRow = { Date: date, Type: 'ACTUAL' };
-          allModels.forEach(m => actualRow[m] = actualsMap[m] || 0);
-          reportRows.push(actualRow);
+          grandTotal[`${date} Plan`] = 0;
+          grandTotal[`${date} Act`] = 0;
       });
 
-      exportToCSV(reportRows, `Matrix_Report_${exportArea}_${exportRangeStart}_to_${exportRangeEnd}`);
+      // 4. Build Data Rows
+      const reportRows = allModels.map(model => {
+          const row = { Category: model };
+
+          // A. Summary Columns
+          // Get Monthly Plan (Assuming exportRangeStart determines the month)
+          const currentMonth = exportRangeStart.slice(0, 7); // "2025-12"
+          const monthlyBudget = (monthlyPlans[currentMonth] && monthlyPlans[currentMonth][model]) || 0;
+          
+          // Calculate Total Actuals for this specific range and model
+          const modelEntries = entries.filter(e => 
+              e.area === exportArea && 
+              (!exportSupervisor || e.supervisor === exportSupervisor) &&
+              e.date >= exportRangeStart && 
+              e.date <= exportRangeEnd
+          );
+          
+          const totalActual = modelEntries.reduce((sum, e) => {
+              const item = e.items.find(i => i.model === model);
+              return sum + (item ? item.qty : 0);
+          }, 0);
+
+          const balance = monthlyBudget - totalActual;
+          const percent = monthlyBudget > 0 ? Math.round((totalActual / monthlyBudget) * 100) : 0;
+
+          row['Tot. Monthly Plan'] = monthlyBudget;
+          row['Tot.Act'] = totalActual;
+          row['Bal.prod'] = balance;
+          row['% Ach'] = `${percent}%`;
+
+          // Update Grand Totals (Summary)
+          grandTotal['Tot. Monthly Plan'] += monthlyBudget;
+          grandTotal['Tot.Act'] += totalActual;
+          grandTotal['Bal.prod'] += balance;
+
+          // B. Date Columns (Plan vs Act)
+          dates.forEach(date => {
+              // Daily Plan
+              const dayPlan = (dailyPlans[date] && dailyPlans[date][model]) || 0;
+              
+              // Daily Actual
+              const dayEntries = entries.filter(e => 
+                  e.date === date && 
+                  e.area === exportArea &&
+                  (!exportSupervisor || e.supervisor === exportSupervisor)
+              );
+              const dayActual = dayEntries.reduce((sum, e) => {
+                  const item = e.items.find(i => i.model === model);
+                  return sum + (item ? item.qty : 0);
+              }, 0);
+
+              // Set Row Data
+              row[`${date} Plan`] = dayPlan;
+              row[`${date} Act`] = dayActual;
+
+              // Update Grand Totals (Daily)
+              grandTotal[`${date} Plan`] += dayPlan;
+              grandTotal[`${date} Act`] += dayActual;
+          });
+
+          return row;
+      });
+
+      // 5. Finalize Grand Total Percentage
+      const gtPercent = grandTotal['Tot. Monthly Plan'] > 0 
+          ? Math.round((grandTotal['Tot.Act'] / grandTotal['Tot. Monthly Plan']) * 100) 
+          : 0;
+      grandTotal['% Ach'] = `${gtPercent}%`;
+
+      // 6. Append Grand Total Row
+      reportRows.push(grandTotal);
+
+      // 7. Export
+      exportToCSV(reportRows, `Production_Report_${exportArea}_${exportRangeStart}`);
   };
 
   // --- Reports Data ---
@@ -932,10 +983,10 @@ export default function App() {
                       <button 
                           onClick={generateMatrixReport}
                           className="w-full bg-blue-600 text-white py-3 rounded-lg font-bold flex items-center justify-center gap-2 mt-4 hover:bg-blue-700 shadow-md">
-                          <FileSpreadsheet size={20} /> Download Matrix Report
+                          <FileSpreadsheet size={20} /> Download Report
                       </button>
                       <p className="text-center text-xs text-gray-400 mt-2">
-                          Format: Date Rows x Model Columns <br/>(Plan vs Actual)
+                          Format: Excel Style (Model Rows + Plan/Actual Columns)
                       </p>
                   </div>
               </Card>
@@ -985,7 +1036,6 @@ export default function App() {
   };
 
   const renderSettingsScreen = () => {
-    // NEW: Check lock status
     if (!isSettingsUnlocked) return renderLockScreen('settings');
 
     const getSafeGroupData = (groupKey) => {
@@ -1006,7 +1056,6 @@ export default function App() {
       <Card className="p-4 bg-purple-50 border-purple-100">
           <h3 className="font-bold text-purple-800 text-sm mb-3 flex items-center gap-2"><User size={16}/> Supervisor Management</h3>
           
-          {/* Add Supervisor Form */}
           <div className="mb-4 space-y-2">
               <input type="text" placeholder="Supervisor Name" value={newSupervisorName} onChange={e => setNewSupervisorName(e.target.value)} className="w-full p-2 text-sm border rounded" />
               <div className="flex gap-2">
