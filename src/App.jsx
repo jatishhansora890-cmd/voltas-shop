@@ -30,8 +30,8 @@ import {
   MessageCircle,
   FileSpreadsheet,
   Filter,
-  Share2,  // NEW ICON
-  X        // NEW ICON
+  Share2,
+  X
 } from 'lucide-react';
 
 // --- Firebase Imports ---
@@ -189,11 +189,15 @@ export default function App() {
   const [rangeStart, setRangeStart] = useState(new Date().toISOString().split('T')[0]);
   const [rangeEnd, setRangeEnd] = useState(new Date().toISOString().split('T')[0]);
 
-  // Advanced Export Filters State
+  // NEW: Advanced Export Filters State
   const [exportRangeStart, setExportRangeStart] = useState(new Date().toISOString().split('T')[0]);
   const [exportRangeEnd, setExportRangeEnd] = useState(new Date().toISOString().split('T')[0]);
   const [exportSupervisor, setExportSupervisor] = useState('');
   const [exportArea, setExportArea] = useState(AREAS[0]);
+  // --- NEW FILTERS ---
+  const [exportCategory, setExportCategory] = useState('');
+  const [exportModel, setExportModel] = useState('');
+  const [exportMachine, setExportMachine] = useState('');
 
   // Plan Edit Screen State
   const [planMode, setPlanMode] = useState('daily');
@@ -201,7 +205,7 @@ export default function App() {
   const [planDate, setPlanDate] = useState(new Date().toISOString().split('T')[0]);
   const [tempPlanData, setTempPlanData] = useState({});
 
-  // NEW: End Shift Report State
+  // End Shift Report State
   const [showReportModal, setShowReportModal] = useState(false);
   const [reportParams, setReportParams] = useState({ shift: 'General Shift', manpower: '', losses: '' });
 
@@ -507,15 +511,13 @@ export default function App() {
     const link = document.createElement('a'); const url = URL.createObjectURL(blob); link.setAttribute('href', url); link.setAttribute('download', `${filename}.csv`); document.body.appendChild(link); link.click(); document.body.removeChild(link);
   };
 
-  // --- NEW: GENERATE WHATSAPP REPORT ---
+  // --- GENERATE WHATSAPP REPORT ---
   const handleGenerateReport = () => {
-      // 1. Calculate Today's Totals for the Active Tab
       const todayEntries = entries.filter(e => e.date === entryDate && e.area === activeTab);
       const modelStats = {};
       let totalActual = 0;
       let totalPlan = 0;
 
-      // Actuals
       todayEntries.forEach(e => {
           e.items.forEach(i => {
               if (!modelStats[i.model]) modelStats[i.model] = 0;
@@ -524,37 +526,32 @@ export default function App() {
           });
       });
 
-      // Plans (Get relevant models for this area)
       const dataKey = getDataKeyForArea(activeTab);
       const isWD = dataKey === 'WD_LINE';
       const todaysPlanObj = dailyPlans[entryDate] || {};
       
       let allModels = [];
       if(activeTab === 'CRF') {
-          // For CRF, iterate stats
           allModels = Object.keys(modelStats);
       } else {
           const group = masterData[dataKey];
           allModels = isWD ? (group["Standard"] || []) : Object.values(group).flat();
       }
 
-      // Build Model Text lines
       let modelLines = "";
       allModels.forEach(m => {
           const actual = modelStats[m] || 0;
           const plan = todaysPlanObj[m] || 0;
-          if (activeModels[m] === false && actual === 0 && plan === 0) return; // Skip inactive
+          if (activeModels[m] === false && actual === 0 && plan === 0) return;
           if (actual > 0 || plan > 0) {
               modelLines += `${m} :- ${actual}${plan > 0 ? ` / ${plan}` : ''} nos.%0A`;
               totalPlan += plan;
           }
       });
 
-      // 2. Format Date
-      const dateParts = entryDate.split('-'); // YYYY-MM-DD
+      const dateParts = entryDate.split('-'); 
       const formattedDate = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
 
-      // 3. Build Message String
       const message = `*${activeTab.toUpperCase()} PRODUCTION REPORT..*%0A%0A` +
                       `*DATE :-* ${formattedDate}%0A` +
                       `*Shift :-* ${reportParams.shift}%0A` +
@@ -563,52 +560,131 @@ export default function App() {
                       `*Total :-  ${totalActual} ${totalPlan > 0 ? `/ ${totalPlan}` : ''} nos.*%0A%0A` +
                       `Major Losses :-${reportParams.losses ? '%0A' + encodeURIComponent(reportParams.losses) : ' Nil'}`;
 
-      // 4. Open WhatsApp
       window.open(`https://wa.me/?text=${message}`, '_blank');
   };
 
+  // --- NEW: FULL FILTER MATRIX REPORT ---
   const generateMatrixReport = () => {
+      // 1. Get Dates
       const start = new Date(exportRangeStart);
       const end = new Date(exportRangeEnd);
       const dates = [];
       for(let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
           dates.push(new Date(d).toISOString().split('T')[0]);
       }
+
+      // 2. Identify Models based on Filters (Area, Category, Model, Machine)
       const dataKey = getDataKeyForArea(exportArea);
       const isWD = dataKey === 'WD_LINE';
       let allModels = [];
+
       if (exportArea === 'CRF') {
-          allModels = [...new Set(entries.filter(e => e.area === 'CRF').flatMap(e => e.items.map(i => i.model)))];
+          // For CRF, if a Machine is selected, we ideally want Parts associated with it
+          // OR simply filter the entries. Let's find unique parts from data + filter by machine logic
+          // Getting models/parts list:
+          let machineParts = [];
+          if (exportMachine && masterData.CRF_MACHINES[exportMachine]) {
+              machineParts = masterData.CRF_MACHINES[exportMachine]; // Use master data if machine selected
+          }
+          
+          const uniqueEntryParts = [...new Set(entries.filter(e => e.area === 'CRF').flatMap(e => e.items.map(i => i.model)))];
+          
+          if (exportMachine) {
+              // Intersection of Master Data Parts and Actual Produced Parts (to show activity)
+              allModels = machineParts; 
+          } else {
+              allModels = uniqueEntryParts;
+          }
       } else {
+          // Assembly / WD
           const group = masterData[dataKey];
-          allModels = isWD ? (group["Standard"] || []) : Object.values(group).flat();
+          if(isWD) {
+             allModels = group["Standard"] || [];
+          } else {
+             // If Category Filter is ON
+             if (exportCategory) {
+                 allModels = group[exportCategory] || [];
+             } else {
+                 allModels = Object.values(group).flat();
+             }
+          }
       }
+
+      // Apply Single Model Filter
+      if (exportModel) {
+          allModels = allModels.filter(m => m === exportModel);
+      }
+      
       allModels.sort();
+
+      // 3. Prepare Data
       const grandTotal = { Category: 'Grand Total', 'Tot. Monthly Plan': 0, 'Tot.Act': 0, 'Bal.prod': 0, '% Ach': '' };
       dates.forEach(date => { grandTotal[`${date} Plan`] = 0; grandTotal[`${date} Act`] = 0; });
 
       const reportRows = allModels.map(model => {
-          const row = { Category: model };
+          const row = { Category: model }; // CSV Key uses 'Category' as header for Model Name
           const currentMonth = exportRangeStart.slice(0, 7);
           const monthlyBudget = (monthlyPlans[currentMonth] && monthlyPlans[currentMonth][model]) || 0;
-          const modelEntries = entries.filter(e => e.area === exportArea && (!exportSupervisor || e.supervisor === exportSupervisor) && e.date >= exportRangeStart && e.date <= exportRangeEnd);
-          const totalActual = modelEntries.reduce((sum, e) => sum + (e.items.find(i => i.model === model)?.qty || 0), 0);
+          
+          // --- FILTERED TOTAL ACTUAL CALCULATION ---
+          // Filter Entries by: Date Range, Area, Supervisor
+          const modelEntries = entries.filter(e => 
+              e.area === exportArea && 
+              (!exportSupervisor || e.supervisor === exportSupervisor) && 
+              e.date >= exportRangeStart && 
+              e.date <= exportRangeEnd
+          );
+          
+          // Sum up items, optionally filtering by Machine for CRF
+          const totalActual = modelEntries.reduce((sum, e) => {
+              const item = e.items.find(i => 
+                  i.model === model && 
+                  (!exportMachine || i.machine === exportMachine) // MACHINE FILTER HERE
+              );
+              return sum + (item ? item.qty : 0);
+          }, 0);
+
           const balance = monthlyBudget - totalActual;
           const percent = monthlyBudget > 0 ? Math.round((totalActual / monthlyBudget) * 100) : 0;
           row['Tot. Monthly Plan'] = monthlyBudget; row['Tot.Act'] = totalActual; row['Bal.prod'] = balance; row['% Ach'] = `${percent}%`;
           grandTotal['Tot. Monthly Plan'] += monthlyBudget; grandTotal['Tot.Act'] += totalActual; grandTotal['Bal.prod'] += balance;
+          
+          // --- DAILY COLUMNS ---
           dates.forEach(date => {
               const dayPlan = (dailyPlans[date] && dailyPlans[date][model]) || 0;
-              const dayActual = entries.filter(e => e.date === date && e.area === exportArea && (!exportSupervisor || e.supervisor === exportSupervisor)).reduce((sum, e) => sum + (e.items.find(i => i.model === model)?.qty || 0), 0);
+              
+              const dayEntries = entries.filter(e => 
+                  e.date === date && 
+                  e.area === exportArea && 
+                  (!exportSupervisor || e.supervisor === exportSupervisor)
+              );
+              
+              const dayActual = dayEntries.reduce((sum, e) => {
+                   const item = e.items.find(i => 
+                       i.model === model && 
+                       (!exportMachine || i.machine === exportMachine) // MACHINE FILTER HERE
+                   );
+                   return sum + (item ? item.qty : 0);
+              }, 0);
+
               row[`${date} Plan`] = dayPlan; row[`${date} Act`] = dayActual;
               grandTotal[`${date} Plan`] += dayPlan; grandTotal[`${date} Act`] += dayActual;
           });
           return row;
       });
+
       const gtPercent = grandTotal['Tot. Monthly Plan'] > 0 ? Math.round((grandTotal['Tot.Act'] / grandTotal['Tot. Monthly Plan']) * 100) : 0;
       grandTotal['% Ach'] = `${gtPercent}%`;
       reportRows.push(grandTotal);
-      exportToCSV(reportRows, `Production_Report_${exportArea}_${exportRangeStart}`);
+      
+      // Filename generation
+      let fname = `Report_${exportArea}`;
+      if(exportCategory) fname += `_${exportCategory}`;
+      if(exportModel) fname += `_${exportModel}`;
+      if(exportMachine) fname += `_${exportMachine}`;
+      fname += `_${exportRangeStart}`;
+
+      exportToCSV(reportRows, fname);
   };
 
   // --- Reports Data ---
@@ -851,7 +927,7 @@ export default function App() {
           )}
         </div>
         
-        {/* NEW: END SHIFT REPORT MODAL */}
+        {/* END SHIFT REPORT MODAL */}
         {showReportModal && (
             <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4">
                 <div className="bg-white rounded-xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in-95 duration-200">
@@ -891,6 +967,14 @@ export default function App() {
 
   const renderReportScreen = () => {
     const isCRF = reportArea === 'CRF';
+    // Logic for dropdown population
+    const areaData = masterData[getDataKeyForArea(exportArea)];
+    const availableCategories = (exportArea === 'CRF' || exportArea === 'WD final') ? [] : Object.keys(areaData || {});
+    const availableModels = (exportArea === 'CRF' || exportArea === 'WD final') 
+        ? [] // handled differently or standard
+        : (exportCategory ? (areaData[exportCategory] || []) : []);
+    const availableMachines = Object.keys(masterData.CRF_MACHINES || {});
+
     return (
     <div className="p-4 max-w-md mx-auto space-y-6 pb-20">
       
@@ -988,6 +1072,7 @@ export default function App() {
                   <h3 className="text-sm font-bold text-gray-700 mb-4 flex items-center gap-2"><Filter size={18} /> Advanced Filters</h3>
                   
                   <div className="space-y-3">
+                      {/* DATE RANGE */}
                       <div className="grid grid-cols-2 gap-3">
                           <div>
                               <label className="text-xs font-bold text-gray-500 mb-1 block">From</label>
@@ -999,12 +1084,44 @@ export default function App() {
                           </div>
                       </div>
 
-                      <div>
-                          <label className="text-xs font-bold text-gray-500 mb-1 block">Work Area</label>
-                          <select value={exportArea} onChange={(e) => setExportArea(e.target.value)} className="w-full p-2 border rounded text-sm bg-white">
-                              {AREAS.map(area => <option key={area} value={area}>{area}</option>)}
-                          </select>
+                      {/* AREA & MACHINE (CRF) */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                            <label className="text-xs font-bold text-gray-500 mb-1 block">Work Area</label>
+                            <select value={exportArea} onChange={(e) => { setExportArea(e.target.value); setExportCategory(''); setExportModel(''); setExportMachine(''); }} className="w-full p-2 border rounded text-sm bg-white">
+                                {AREAS.map(area => <option key={area} value={area}>{area}</option>)}
+                            </select>
+                        </div>
+                        {exportArea === 'CRF' && (
+                            <div className="animate-in fade-in">
+                                <label className="text-xs font-bold text-gray-500 mb-1 block">Machine (Optional)</label>
+                                <select value={exportMachine} onChange={(e) => setExportMachine(e.target.value)} className="w-full p-2 border rounded text-sm bg-white">
+                                    <option value="">All Machines</option>
+                                    {availableMachines.map(m => <option key={m} value={m}>{m}</option>)}
+                                </select>
+                            </div>
+                        )}
                       </div>
+
+                      {/* CATEGORY & MODEL (CF/WD) */}
+                      {exportArea !== 'CRF' && exportArea !== 'WD final' && (
+                          <div className="grid grid-cols-2 gap-3 animate-in fade-in">
+                              <div>
+                                  <label className="text-xs font-bold text-gray-500 mb-1 block">Category</label>
+                                  <select value={exportCategory} onChange={(e) => { setExportCategory(e.target.value); setExportModel(''); }} className="w-full p-2 border rounded text-sm bg-white">
+                                      <option value="">All Categories</option>
+                                      {availableCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                                  </select>
+                              </div>
+                              <div>
+                                  <label className="text-xs font-bold text-gray-500 mb-1 block">Model</label>
+                                  <select value={exportModel} onChange={(e) => setExportModel(e.target.value)} className="w-full p-2 border rounded text-sm bg-white">
+                                      <option value="">All Models</option>
+                                      {availableModels.map(m => <option key={m} value={m}>{m}</option>)}
+                                  </select>
+                              </div>
+                          </div>
+                      )}
 
                       <div>
                           <label className="text-xs font-bold text-gray-500 mb-1 block">Supervisor (Optional)</label>
@@ -1022,7 +1139,7 @@ export default function App() {
                           <FileSpreadsheet size={20} /> Download Report
                       </button>
                       <p className="text-center text-xs text-gray-400 mt-2">
-                          Format: Excel Style (Model Rows + Plan/Actual Columns)
+                          Format: Excel Style (Filtered Matrix)
                       </p>
                   </div>
               </Card>
