@@ -640,6 +640,88 @@ export default function App() {
     );
   };
 
+// --- NEW: Process Flow & Summary Logic ---
+
+  // 1. Calculate Production Flow (Stage by Stage)
+  const getFlowStats = () => {
+    // We ignore the 'Area' filter for Flow to show the whole line, but respect Dates
+    const flowStats = PROCESS_FLOW.mainLine.map((areaName, index) => {
+      const areaEntries = entries.filter(e => 
+        e.area === areaName && 
+        e.date >= filterStartDate && 
+        e.date <= filterEndDate
+      );
+      
+      const totalQty = areaEntries.reduce((acc, entry) => 
+        acc + entry.items.reduce((s, i) => s + i.qty, 0), 0
+      );
+
+      return { area: areaName, total: totalQty, step: index + 1 };
+    });
+    return flowStats;
+  };
+
+  // 2. Calculate Summarized Plan vs Actuals (Range Based)
+  const getSummaryStats = () => {
+    // A. Generate array of dates in range
+    const dates = [];
+    let curr = new Date(filterStartDate);
+    const end = new Date(filterEndDate);
+    while (curr <= end) {
+      dates.push(new Date(curr).toISOString().split('T')[0]);
+      curr.setDate(curr.getDate() + 1);
+    }
+
+    // B. Identify Models to show (based on filters)
+    const dataKey = getDataKeyForArea(filterArea);
+    const isCRF = filterArea === 'CRF';
+    let targetModels = [];
+    
+    if (isCRF) {
+       // For CRF, we look at distinct parts produced or machine parts
+       targetModels = [...new Set(entries.filter(e => e.area === 'CRF').flatMap(e => e.items.map(i => i.part)))];
+    } else {
+       // For Assembly/WD
+       const group = masterData[dataKey];
+       if (filterCategory && group[filterCategory]) targetModels = group[filterCategory];
+       else targetModels = (dataKey === 'WD_LINE') ? group["Standard"] : Object.values(group).flat();
+       
+       if (filterModel) targetModels = targetModels.filter(m => m === filterModel);
+    }
+
+    // C. Aggregate Data
+    const summaryRows = targetModels.map(model => {
+      // 1. Sum Plan for all days in range
+      let totalPlan = 0;
+      dates.forEach(date => {
+        if (dailyPlans[date] && dailyPlans[date][model]) {
+          totalPlan += dailyPlans[date][model];
+        }
+      });
+
+      // 2. Sum Actuals for all days in range (Filtered by Area/Supervisor)
+      const relevantEntries = getFilteredEntries();
+      const totalActual = relevantEntries.reduce((sum, entry) => {
+        return sum + entry.items.reduce((iSum, item) => {
+          // Match Model (or Part for CRF)
+          const match = isCRF ? (item.part === model) : (item.model === model);
+          return match ? iSum + item.qty : iSum;
+        }, 0);
+      }, 0);
+
+      return {
+        model,
+        totalPlan,
+        totalActual,
+        percent: totalPlan > 0 ? Math.round((totalActual / totalPlan) * 100) : 0,
+        gap: totalActual - totalPlan
+      };
+    });
+
+    // Sort by achievement gap (lowest first)
+    return summaryRows.sort((a,b) => a.percent - b.percent);
+  };
+  
   const renderReportScreen = () => {
     // Determine Filter Options based on Selection
     const isCRF = filterArea === 'CRF';
@@ -723,12 +805,103 @@ export default function App() {
           </div>
       )}
       
-      {reportType === 'flow' && (
-          <div className="bg-white p-4 rounded-xl border border-gray-200 text-center">
-              <GitMerge size={48} className="mx-auto text-blue-200 mb-2"/>
-              <p className="text-sm text-gray-500">Process Flow View</p>
-              <p className="text-xs text-gray-400">Uses monthly aggregates. Use the filters above to narrow down specific models/dates if needed.</p>
+{reportType === 'flow' && (
+        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+          
+          {/* 1. PROCESS FLOW VISUALIZATION */}
+          {(filterArea === 'Pre-assembly' || filterArea === 'Cabinet foaming' || filterArea === 'CF final') && (
+             <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                <h3 className="text-sm font-bold text-gray-700 mb-4 flex items-center gap-2">
+                  <GitMerge size={16} className="text-blue-600"/> Production Flow (Main Line)
+                </h3>
+                <div className="relative pb-4">
+                  {/* Vertical Line */}
+                  <div className="absolute left-6 top-4 bottom-4 w-0.5 bg-gray-200"></div>
+                  
+                  {getFlowStats().map((stage, idx, arr) => (
+                    <div key={stage.area} className="relative flex items-center gap-4 mb-6 last:mb-0">
+                      <div className={`z-10 w-12 h-12 rounded-full flex items-center justify-center border-4 border-white shadow-md ${stage.total > 0 ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'}`}>
+                        <span className="font-bold text-lg">{idx + 1}</span>
+                      </div>
+                      <div className="flex-1 bg-gray-50 p-3 rounded-lg border border-gray-200 flex justify-between items-center">
+                        <div>
+                          <div className="text-xs font-bold text-gray-500 uppercase">{stage.area}</div>
+                          <div className="text-xs text-gray-400">Range Total</div>
+                        </div>
+                        <div className="text-xl font-bold text-gray-800">{stage.total}</div>
+                      </div>
+                      {/* Efficiency Arrow (simplified) */}
+                      {idx < arr.length - 1 && (
+                         <div className="absolute -bottom-5 left-12 ml-4 text-[10px] text-gray-400 font-medium">
+                            <ArrowDown size={14} className="mx-auto"/>
+                         </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+             </div>
+          )}
+
+          {/* 2. SUMMARIZED PLAN REPORT TABLE */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+             <div className="bg-blue-600 p-3 text-white flex justify-between items-center">
+                <h3 className="font-bold text-sm flex items-center gap-2">
+                   <Target size={16}/> Plan vs Actual Summary
+                </h3>
+                <span className="text-xs bg-blue-700 px-2 py-1 rounded">
+                   {new Date(filterStartDate).toLocaleDateString()} - {new Date(filterEndDate).toLocaleDateString()}
+                </span>
+             </div>
+             
+             <div className="overflow-x-auto">
+               <table className="w-full text-sm text-left">
+                 <thead className="text-xs text-gray-500 uppercase bg-gray-50 border-b border-gray-200">
+                   <tr>
+                     <th className="px-4 py-3">{filterArea === 'CRF' ? 'Part Name' : 'Model Name'}</th>
+                     <th className="px-4 py-3 text-right">Total Plan</th>
+                     <th className="px-4 py-3 text-right">Total Act</th>
+                     <th className="px-4 py-3 text-right">Gap</th>
+                     <th className="px-4 py-3 text-center">% Ach</th>
+                   </tr>
+                 </thead>
+                 <tbody className="divide-y divide-gray-100">
+                   {getSummaryStats().map((row, idx) => (
+                     <tr key={idx} className="hover:bg-gray-50">
+                       <td className="px-4 py-3 font-medium text-gray-700">{row.model}</td>
+                       <td className="px-4 py-3 text-right text-gray-500">{row.totalPlan}</td>
+                       <td className="px-4 py-3 text-right font-bold text-gray-800">{row.totalActual}</td>
+                       <td className={`px-4 py-3 text-right font-medium ${row.gap < 0 ? 'text-red-500' : 'text-green-500'}`}>
+                         {row.gap > 0 ? `+${row.gap}` : row.gap}
+                       </td>
+                       <td className="px-4 py-3 text-center">
+                         <span className={`px-2 py-1 rounded text-xs font-bold ${
+                           row.percent >= 100 ? 'bg-green-100 text-green-700' : 
+                           row.percent >= 80 ? 'bg-yellow-100 text-yellow-700' : 
+                           'bg-red-100 text-red-700'
+                         }`}>
+                           {row.percent}%
+                         </span>
+                       </td>
+                     </tr>
+                   ))}
+                   {getSummaryStats().length === 0 && (
+                     <tr><td colSpan="5" className="p-8 text-center text-gray-400">No data found for this range.</td></tr>
+                   )}
+                 </tbody>
+                 {/* Footer Total */}
+                 <tfoot className="bg-gray-50 border-t border-gray-200 font-bold text-gray-700">
+                    <tr>
+                      <td className="px-4 py-3">Total</td>
+                      <td className="px-4 py-3 text-right">{getSummaryStats().reduce((a,b)=>a+b.totalPlan,0)}</td>
+                      <td className="px-4 py-3 text-right text-blue-600">{getSummaryStats().reduce((a,b)=>a+b.totalActual,0)}</td>
+                      <td className="px-4 py-3 text-right"></td>
+                      <td className="px-4 py-3"></td>
+                    </tr>
+                 </tfoot>
+               </table>
+             </div>
           </div>
+        </div>
       )}
 
     </div>
